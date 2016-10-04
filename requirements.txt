@@ -1,0 +1,12 @@
+werkzeug
+shortuuid
+redislite
+redis
+hiredis
+rdflib
+networkx
+futures
+rfc3987
+flask
+Flask-Negotiate
+requests
