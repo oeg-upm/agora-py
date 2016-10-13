@@ -19,6 +19,7 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import logging
+from datetime import datetime
 
 import sys
 from threading import Thread, Event, Lock
@@ -67,6 +68,7 @@ def chunks(l, n=None):
     finished = False
     while not finished:
         chunk = []
+        start = datetime.now()
         context, s, p, o = l.next()
         last_ctx = context
         chunk.append((s, p, o))
@@ -76,6 +78,9 @@ def chunks(l, n=None):
                 chunk.append((s, p, o))
         except StopIteration:
             finished = True
+        log.debug(
+            'Took {}ms to collect a fragment chunk of {} triples'.format((datetime.now() - start).total_seconds(),
+                                                                          len(chunk)))
         yield chunk
 
 
@@ -115,6 +120,7 @@ class FragmentResult(SPARQLResult):
             try:
                 if self._genbindings:
                     th = Thread(target=self.__collect)
+                    th.daemon = True
                     self.__collecting = True
                     th.start()
                     while True:
@@ -140,6 +146,16 @@ class FragmentResult(SPARQLResult):
                 log.error(e.message)
 
 
+def extract_bgps(part):
+    while part:
+        if part.name == 'BGP':
+            yield part
+        elif part.name == 'LeftJoin':
+            yield part.p1
+            yield part.p2
+        part = part.p
+
+
 class FragmentProcessor(SPARQLProcessor):
     def restore(self, query, initBindings, base):
         def wrapper():
@@ -156,11 +172,14 @@ class FragmentProcessor(SPARQLProcessor):
         the query and will be overridden by any BASE given in the query.
         """
 
+        start = datetime.now()
         if not isinstance(strOrQuery, Query):
             parsetree = parseQuery(strOrQuery)
             query = translateQuery(parsetree, base, initNs)
         else:
             query = strOrQuery
+        log.debug(
+            'Took {}ms to parse the SPARQL query: {}'.format((datetime.now() - start).total_seconds(), str(strOrQuery)))
 
         roots = set([])
         plan = None
@@ -168,39 +187,29 @@ class FragmentProcessor(SPARQLProcessor):
         bgp_graph = nx.DiGraph()
         if fragment_gen is None:
             part = query.algebra
-            while part.name != 'BGP':
-                part = part.p
-
+            bgp_parts = extract_bgps(query.algebra)
             bgp = set([])
 
-            for s, p, o in part.triples:
-                s_elm = tp_part(self.graph, s)
-                if p == RDF.type:
-                    o_elm = self.graph.qname(o)
-                    p_elm = 'a'
-                else:
-                    p_elm = self.graph.qname(p)
-                    o_elm = tp_part(self.graph, o)
+            for part in bgp_parts:
+                for s, p, o in part.triples:
+                    s_elm = tp_part(self.graph, s)
+                    if p == RDF.type:
+                        o_elm = self.graph.qname(o)
+                        p_elm = 'a'
+                    else:
+                        p_elm = self.graph.qname(p)
+                        o_elm = tp_part(self.graph, o)
 
-                bgp.add('{} {} {}'.format(s_elm, p_elm, o_elm))
-                bgp_graph.add_edge(s, o, predicate=p)
+                    bgp.add('{} {} {}'.format(s_elm, p_elm, o_elm))
+                    bgp_graph.add_edge(s, o, predicate=p)
 
-            # print 'Agora graph pattern:'
-            # print '{'
-            # for tp in bgp:
-            #     print '  ', tp, '.'
-            # print '}'
+            start = datetime.now()
             plan, fragment_gen = self.graph.gen(*bgp)
+            log.debug('Took {}s to build a plan for {}'.format((datetime.now() - start).total_seconds(), str(bgp)))
 
             roots = filter(lambda x: bgp_graph.in_degree(x) == 0, bgp_graph.nodes())
             for root in roots:
                 part.triples = [(root, RDF.type, AGORA.Root)] + part.triples
-
-            # print 'Effective BGP:'
-            # print '{'
-            # for tp in part.triples:
-            #     print '  {} {} {} .'.format(tp[0].n3(), tp[1].n3(), tp[2].n3())
-            # print '}'
 
         eval = evalQuery(self.graph, query, initBindings, base)
         eval['gen_'] = fragment_gen

@@ -62,7 +62,8 @@ def __load_owl(owl):
             owl_g.parse(source=StringIO.StringIO(owl), format=f)
             log.debug('Parsed ontology in {} format'.format(f))
             break
-        except SyntaxError:
+        except SyntaxError, e:
+            log.warn(e.message)
             pass
 
     if not len(owl_g):

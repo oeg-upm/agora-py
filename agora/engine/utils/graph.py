@@ -30,12 +30,20 @@ __author__ = 'Fernando Serena'
 log = logging.getLogger('agora.engine.utils.cache')
 
 
-def get_triple_store(cache, persist_mode=False, triples_path=None):
+def __prepare_store_path(base, path):
+    if not os.path.exists(base):
+        os.makedirs(base)
+    if not os.path.exists('{}/{}'.format(base, path)):
+        os.makedirs('{}/{}'.format(base, path))
+
+
+def get_cached_triple_store(cache, persist_mode=False, base='store', path=None):
     if persist_mode:
-        if triples_path is None:
-            triples_path = 'triples'
+        if path is None:
+            path = 'resources'
+        __prepare_store_path(base, path)
         graph = ContextGraph(cache, 'Sleepycat')
-        graph.open(triples_path, create=True)
+        graph.open('{}/{}'.format(base, path), create=True)
     else:
         graph = ContextGraph(cache)
 
@@ -43,20 +51,18 @@ def get_triple_store(cache, persist_mode=False, triples_path=None):
     return graph
 
 
-def get_resource_cache(persist_mode=False, base='store', path=None):
+def get_triple_store(persist_mode=False, base='store', path=None):
     if persist_mode:
         if path is None:
             path = 'resources'
-        if not os.path.exists(base):
-            os.makedirs(base)
-        if os.path.exists('{}/{}'.format(base, path)):
-            shutil.rmtree('{}/{}'.format(base, path))
-        os.makedirs('{}/{}'.format(base, path))
-        resources_cache = ConjunctiveGraph('Sleepycat')
-        resources_cache.open('{}/{}'.format(base, path), create=True)
+        __prepare_store_path(base, path)
+        graph = ConjunctiveGraph('Sleepycat', identifier=path)
+        graph.open('{}/{}'.format(base, path), create=True)
     else:
-        resources_cache = ConjunctiveGraph()
-    return resources_cache
+        graph = ConjunctiveGraph()
+        graph.store.graph_aware = False
+
+    return graph
 
 
 def rmtree(path):

@@ -25,6 +25,8 @@ from functools import wraps
 
 import requests
 from flask import Flask, jsonify, request, url_for
+from flask import Response
+from flask import stream_with_context
 from flask_negotiate import consumes, produces
 
 __author__ = 'Fernando Serena'
@@ -68,9 +70,9 @@ def handle_invalid_usage(error):
     return response
 
 
-class AgoraServer(Flask):
+class Server(Flask):
     def __init__(self, import_name):
-        super(AgoraServer, self).__init__(import_name)
+        super(Server, self).__init__(import_name)
         self.errorhandler(APIError)(handle_invalid_usage)
 
     def response(self, rv, content_type=JSON, status=200):
@@ -88,12 +90,15 @@ class AgoraServer(Flask):
         return url_for(func_name, _external=True, **kwargs)
 
     def make_response(self, rv):
-        return super(AgoraServer, self).make_response(rv)
+        return super(Server, self).make_response(rv)
 
     def produce(self, result, produce_types=()):
         if result is None:
             return ''
-        if JSON in produce_types:
+
+        if hasattr(result, 'next'):
+            response = Response(stream_with_context(result), mimetype=produce_types[0])
+        elif JSON in produce_types:
             response = jsonify(result)
         else:
             response = self.make_response(str(result))
@@ -171,15 +176,18 @@ class AgoraServer(Flask):
         return decorator
 
 
-class AgoraClient(object):
+class Client(object):
     def __init__(self, host='localhost', port=9002):
         self.host = 'http://{}:{}'.format(host, port)
 
     def _get_request(self, path, accept='application/json'):
         try:
-            response = requests.get(urlparse.urljoin(self.host, path), headers={'Accept': accept})
+            stream = accept == 'application/agora-quad'
+            response = requests.get(urlparse.urljoin(self.host, path), headers={'Accept': accept}, stream=stream)
             if response.status_code != 200:
                 raise IOError(response.content)
+            if stream:
+                return response.iter_lines()
             if accept == 'application/json':
                 return response.json()
             return response.content

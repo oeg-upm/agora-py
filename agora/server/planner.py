@@ -24,7 +24,7 @@ import re
 from StringIO import StringIO
 
 from agora.engine.plan import AbstractPlanner
-from agora.server import AgoraServer, TURTLE, HTML, AgoraClient
+from agora.server import Server, TURTLE, HTML, Client, APIError
 from agora.server.fountain import client as fc
 from rdflib import Graph
 
@@ -34,27 +34,31 @@ log = logging.getLogger('agora.server.planner')
 
 
 def build(planner, server=None, import_name=__name__):
-    # type: (AbstractPlanner, AgoraServer, str) -> AgoraServer
+    # type: (AbstractPlanner, Server, str) -> AgoraServer
 
     if server is None:
-        server = AgoraServer(import_name)
+        server = Server(import_name)
 
     @server.get('/plan', produce_types=(TURTLE, HTML))
     def make_plan():
-        gp_str = server.request_args.get('gp', '{}')
-        gp_str = gp_str.lstrip('{').rstrip('}').strip()
-        tps = re.split('\. ', gp_str)
-        tps = map(lambda x: x.strip(), filter(lambda y: y != '', tps))
-        plan = planner.make_plan(*tps)
-        return plan.serialize(format='turtle')
+        try:
+            gp_str = server.request_args.get('gp', '{}')
+            gp_str = gp_str.lstrip('{').rstrip('}').strip()
+            tps = re.split('\. ', gp_str)
+            tps = map(lambda x: x.strip(), filter(lambda y: y != '', tps))
+            plan = planner.make_plan(*tps)
+            return plan.serialize(format='turtle')
+        except NameError, e:
+            raise APIError(e.message)
 
     return server
 
 
-class PlannerClient(AgoraClient, AbstractPlanner):
-    def __init__(self, host='localhost', port=9002):
+class PlannerClient(Client, AbstractPlanner):
+    def __init__(self, host='localhost', port=5000, fountain=None):
+        # type: (str, int, AbstractFountain) -> PlannerClient
         super(PlannerClient, self).__init__(host, port)
-        self.__fountain = fc(host, port)
+        self.__fountain = fc(host, port) if fountain is None else fountain
 
     def make_plan(self, *tps):
         agp = '{ %s }' % ' . '.join(tps)
@@ -68,6 +72,6 @@ class PlannerClient(AgoraClient, AbstractPlanner):
         return self.__fountain
 
 
-def client(host='localhost', port=9002):
+def client(host='localhost', port=5000, fountain=None):
     # type: (str, int) -> PlannerClient
-    return PlannerClient(host, port)
+    return PlannerClient(host, port, fountain)

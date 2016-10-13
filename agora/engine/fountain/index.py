@@ -319,11 +319,10 @@ def _cached(f):
 
 
 class Index(object):
-    def __init__(self):
+    def __init__(self, persist_mode=False, redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None):
         # () -> Index
         self.__schema = None
-        self.__r = get_kv()
-        self.__check_r()
+        self.__r = get_kv(persist_mode, redis_host, redis_port, redis_db, redis_file)
 
     @property
     def schema(self):
@@ -334,21 +333,6 @@ class Index(object):
     def schema(self, schema):
         # type: (Schema) -> None
         self.__schema = schema
-
-    def __check_r(self):
-        # type: () -> None
-        reqs = 0
-        while True:
-            log.debug('Checking Redis... ({})'.format(reqs))
-            reqs += 1
-            try:
-                self.__r.keys('*')
-                break
-            except BusyLoadingError as e:
-                log.warning(e.message)
-            except RedisError:
-                log.error('Redis is not available')
-                sys.exit(-1)
 
     @property
     def r(self):

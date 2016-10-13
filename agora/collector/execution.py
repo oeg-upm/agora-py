@@ -21,20 +21,23 @@
 
 import Queue
 import StringIO
-import gc
 import logging
 import multiprocessing
 import traceback
-from _bsddb import DBNotFoundError
-from agora.engine.plan.graph import AGORA
-from datetime import datetime as dt
 from threading import RLock, Thread, Event
 from xml.sax import SAXParseException
 
+import gc
 import requests
+import sys
+from _bsddb import DBNotFoundError
+from agora.engine.plan.graph import AGORA
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
+from datetime import datetime as dt, datetime
 from rdflib import ConjunctiveGraph, RDF, URIRef
+from rdflib import Graph
+from requests.utils import parse_dict_header
 
 pool = ThreadPoolExecutor(max_workers=20)
 
@@ -74,6 +77,55 @@ def __extend_uri(prefixes, short):
     return short
 
 
+def get_resource_ttl(headers):
+    cache_control = headers.get('Cache-Control', None)
+    ttl = None
+    if cache_control is not None:
+        cache_dict = parse_dict_header(cache_control)
+        ttl = int(cache_dict.get('max-age', ttl))
+    return ttl
+
+
+def get_content(uri, format):
+    try:
+        log.debug(u'[Dereference][START] {}'.format(uri))
+        response = requests.get(uri, headers={'Accept': _accept_mimes[format]}, timeout=30)
+    except requests.Timeout:
+        log.debug(u'[Dereference][TIMEOUT][GET] {}'.format(uri))
+        return True
+    except UnicodeEncodeError:
+        log.debug(u'[Dereference][ERROR][ENCODE] {}'.format(uri))
+        return True
+    except Exception:
+        log.debug(u'[Dereference][ERROR][GET] {}'.format(uri))
+        return True
+
+    if response.status_code == 200:
+        try:
+            return StringIO.StringIO(response.content), response.headers
+        except SyntaxError:
+            traceback.print_exc()
+            log.error(u'[Dereference][ERROR][PARSE] {}'.format(uri))
+            return False
+        except ValueError:
+            traceback.print_exc()
+            log.debug(u'[Dereference][ERROR][VAL] {}'.format(uri))
+            return False
+        except DBNotFoundError:
+            # Ignore this exception... it is raised due to a stupid problem with prefixes
+            return True
+        except SAXParseException:
+            traceback.print_exc()
+            log.error(u'[Dereference][ERROR][SAX] {}'.format(uri))
+            return False
+        except Exception:
+            traceback.print_exc()
+            log.error(u'[Dereference][ERROR] {}'.format(uri))
+            return True
+    else:
+        return True
+
+
 class PlanExecutor(object):
     def __init__(self, plan):
         self.__plan_graph = plan
@@ -89,9 +141,15 @@ class PlanExecutor(object):
         self.__completed = False
         self.__last_success_format = None
         self.__last_iteration_ts = dt.now()
+        self.__fragment_ttl = sys.maxint
+        self.__last_ttl_ts = None
 
         # Request a search plan on initialization and extract patterns and spaces
         self.__extract_patterns_and_spaces()
+
+    @property
+    def ttl(self):
+        return self.__fragment_ttl
 
     def __extract_patterns_and_spaces(self):
         """
@@ -174,7 +232,7 @@ class PlanExecutor(object):
 
     def get_fragment_generator(self, on_load=None, on_seeds=None, on_plink=None, on_link=None, on_type=None,
                                on_type_validation=None, on_tree=None, workers=None, stop_event=None, queue_wait=None,
-                               queue_size=100, cache=None, lazy=True):
+                               queue_size=100, cache=None, loader=None):
         """
         Create a fragment generator that executes the search plan.
         :param on_load: Function to be called just after a new URI is dereferenced
@@ -202,6 +260,9 @@ class PlanExecutor(object):
         if stop_event is None:
             stop_event = Event()
 
+        if loader is None:
+            loader = get_content
+
         def __create_graph():
             if cache is None:
                 return ConjunctiveGraph()
@@ -212,74 +273,64 @@ class PlanExecutor(object):
             if cache is not None:
                 cache.release(g)
             elif g is not None:
-                g.remove((None, None, None))
-                g.close()
+                try:
+                    g.remove((None, None, None))
+                    g.close()
+                except:
+                    pass
 
         def __open_graph(gid, loader, format):
             if cache is None:
                 result = loader(gid, format)
                 if not isinstance(result, bool):
                     content, headers = result
-                    g = ConjunctiveGraph()
-                    g.parse(source=content, format=format)
-                    return g
+                    if not isinstance(content, Graph):
+                        g = ConjunctiveGraph()
+                        g.parse(source=content, format=format)
+                    else:
+                        g = content
+
+                    ttl = get_resource_ttl(headers)
+                    return g, ttl if ttl is not None else 0
                 return result
             else:
                 return cache.create(gid=gid, loader=loader, format=format)
 
-        def __get_content(uri, format):
-            try:
-                log.debug('[Dereference][START] {}'.format(uri))
-                response = requests.get(uri, headers={'Accept': _accept_mimes[format]}, timeout=30)
-            except requests.Timeout:
-                log.debug('[Dereference][TIMEOUT][GET] {}'.format(uri))
-                return True
-            except UnicodeEncodeError:
-                log.debug('[Dereference][ERROR][ENCODE] {}'.format(uri))
-                return True
-            except Exception:
-                log.debug('[Dereference][ERROR][GET] {}'.format(uri))
-                return True
-
-            if response.status_code == 200:
-                try:
-                    return StringIO.StringIO(response.content), response.headers
-                except SyntaxError:
-                    traceback.print_exc()
-                    log.error('[Dereference][ERROR][PARSE] {}'.format(uri))
-                    return False
-                except ValueError:
-                    traceback.print_exc()
-                    log.debug('[Dereference][ERROR][VAL] {}'.format(uri))
-                    return False
-                except DBNotFoundError:
-                    # Ignore this exception... it is raised due to a stupid problem with prefixes
-                    return True
-                except SAXParseException:
-                    traceback.print_exc()
-                    log.error('[Dereference][ERROR][SAX] {}'.format(uri))
-                    return False
-                except Exception:
-                    traceback.print_exc()
-                    log.error('[Dereference][ERROR] {}'.format(uri))
-                    return True
-            else:
-                return True
+        def __update_fragment_ttl():
+            now = datetime.utcnow()
+            if self.__last_ttl_ts is not None:
+                self.__fragment_ttl -= (now - self.__last_ttl_ts).total_seconds()
+                self.__fragment_ttl = max(self.__fragment_ttl, 0)
+            self.__last_ttl_ts = now
 
         def __dereference_uri(tg, uri):
 
             if not isinstance(uri, URIRef):
                 return
 
-            uri = uri.encode('utf-8')
+            uri = uri.toPython()
 
             def treat_resource_content(parse_format):
-                g = __open_graph(uri, loader=__get_content, format=parse_format)
-                if isinstance(g, bool):
-                    return g
+                try:
+                    resource = __open_graph(uri, loader=loader, format=parse_format)
+                except Exception, e:
+                    traceback.print_exc()
+                    log.warn(e.message)
+                    resource = True
+
+                if isinstance(resource, bool):
+                    return resource
+
+                g, ttl = resource
+                with self.__resource_lock:
+                    __update_fragment_ttl()
+                #     print 'old ttl= ', self.__fragment_ttl,
+                    self.__fragment_ttl = min(self.__fragment_ttl, ttl)
+                #     print 'new ttl= ', self.__fragment_ttl
 
                 try:
-                    tg.get_context(uri).__iadd__(g)
+                    for triple in g:
+                        tg.get_context(uri).add(triple)
                     return True
                 finally:
                     if g is not None:
@@ -549,6 +600,7 @@ class PlanExecutor(object):
                         __release_graph(tree_graph)
 
                 self.__completed = True
+                __update_fragment_ttl()
 
             def get_tree_length(x):
                 """
@@ -572,7 +624,7 @@ class PlanExecutor(object):
 
             while not self.__completed or fragment_queue.not_empty:
                 try:
-                    (t, s, p, o) = fragment_queue.get(timeout=1)
+                    (t, s, p, o) = fragment_queue.get(timeout=0.001)
                     fragment_queue.task_done()
                     if p == RDF.type:
                         type_triples.add((t, s, o))
@@ -595,4 +647,5 @@ class PlanExecutor(object):
                     on_type_validation((t, s, RDF.type, o))
                 yield (t, s, RDF.type, o)
 
-        return get_fragment_triples(), self.__plan_graph.namespaces(), self.__plan_graph
+        return {'generator': get_fragment_triples(), 'prefixes': self.__plan_graph.namespaces(),
+                'plan': self.__plan_graph}

@@ -18,17 +18,63 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+import re
+from abc import abstractmethod
 
 from agora.collector.execution import PlanExecutor
+from rdflib import BNode
+from rdflib import Literal
+from rdflib import URIRef
 
 __author__ = "Fernando Serena"
 
 
-class Collector(object):
+class AbstractCollector(object):
+    @property
+    @abstractmethod
+    def prefixes(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_fragment(self, *tps, **kwargs):
+        # type: (list, dict) -> iter
+        """
+        Return a complete fragment for a given gp.
+        :param gp: A graph pattern
+        :return:
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_fragment_generator(self, *tps, **kwargs):
+        # type: (list, dict) -> iter
+        """
+        Return a fragment generator for a given gp.
+        :param gp:
+        :param kwargs:
+        :return:
+        """
+        raise NotImplementedError
+
+
+class Collector(AbstractCollector):
     def __init__(self, planner, cache=None):
         # type: (AbstractPlanner, Cache) -> Collector
         self.cache = cache
         self.__planner = planner
+        self.__loader = None
+
+    @property
+    def loader(self):
+        return self.__loader
+
+    @loader.setter
+    def loader(self, l):
+        self.__loader = l
+
+    @property
+    def planner(self):
+        return self.__planner
 
     def get_fragment(self, *tps, **kwargs):
         """
@@ -38,7 +84,7 @@ class Collector(object):
         """
         plan = self.__planner.make_plan(*tps)
         executor = PlanExecutor(plan)
-        return executor.get_fragment(**kwargs)
+        return executor.get_fragment(cache=self.cache, loader=self.__loader, **kwargs)
 
     def get_fragment_generator(self, *tps, **kwargs):
         """
@@ -47,11 +93,52 @@ class Collector(object):
         :param kwargs:
         :return:
         """
+
         plan = self.__planner.make_plan(*tps)
         executor = PlanExecutor(plan)
-        gen, prefixes, plan = executor.get_fragment_generator(cache=self.cache, **kwargs)
-        return {'generator': gen, 'prefixes': prefixes, 'plan': plan}
+
+        def with_context():
+            return executor.ttl
+
+        fragment_dict = executor.get_fragment_generator(cache=self.cache, loader=self.__loader, **kwargs)
+        fragment_dict['ttl'] = with_context
+        return fragment_dict
 
     @property
     def prefixes(self):
         return self.__planner.fountain.prefixes
+
+
+def triplify(x):
+    def __extract_lang(v):
+        def __lang_tag_match(strg, search=re.compile(r'[^a-z]').search):
+            return not bool(search(strg))
+
+        if '@' in v:
+            try:
+                (v_aux, lang) = tuple(v.split('@'))
+                (v, lang) = (v_aux, lang) if __lang_tag_match(lang) else (v, None)
+            except ValueError:
+                lang = None
+        else:
+            lang = None
+        return v, lang
+
+    def __term(elm):
+        if elm.startswith('<'):
+            return URIRef(elm.lstrip('<').rstrip('>'))
+        elif '^^' in elm:
+            (value, ty) = tuple(elm.split('^^'))
+            return Literal(value.replace('"', ''), datatype=URIRef(ty.lstrip('<').rstrip('>')))
+        elif elm.startswith('_:'):
+            return BNode(elm.replace('_:', ''))
+        else:
+            (elm, lang) = __extract_lang(elm)
+            elm = elm.replace('"', '')
+            if lang is not None:
+                return Literal(elm, lang=lang)
+            else:
+                return Literal(elm)
+
+    c, s, p, o = eval(x)
+    return c, __term(s), __term(p), __term(o)

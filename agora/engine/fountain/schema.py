@@ -20,7 +20,7 @@
 """
 import logging
 
-from agora.engine.utils.graph import get_triple_store
+from agora.engine.utils.graph import get_cached_triple_store
 from rdflib import URIRef, BNode, Graph
 from rdflib.namespace import RDFS, NamespaceManager
 
@@ -356,12 +356,13 @@ def _context(f):
 
 
 class Schema(object):
-    def __init__(self):
+    def __init__(self, persist_mode=False, base=None, path=None):
         self.__cache = Cache()
         self.__graph = None
         self.__namespaces = {}
         self.__prefixes = {}
-        self.graph = get_triple_store(self.__cache)
+        self.graph = get_cached_triple_store(self.__cache, persist_mode, base=base, path=path)
+        self.__update_ns_dicts()
 
     @property
     def cache(self):

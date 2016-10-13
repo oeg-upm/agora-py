@@ -23,7 +23,7 @@ import logging
 from agora.engine.fountain import AbstractFountain
 from agora.engine.fountain.onto import VocabularyNotFound, DuplicateVocabulary, VocabularyError
 from agora.engine.fountain.seed import InvalidSeedError, DuplicateSeedError
-from agora.server import AgoraServer, APIError, Conflict, TURTLE, NotFound, AgoraClient
+from agora.server import Server, APIError, Conflict, TURTLE, NotFound, Client
 
 __author__ = 'Fernando Serena'
 
@@ -31,10 +31,10 @@ log = logging.getLogger('agora.server.fountain')
 
 
 def build(fountain, server=None, import_name=__name__):
-    # type: (AbstractFountain, AgoraServer, str) -> AgoraServer
+    # type: (AbstractFountain, Server, str) -> AgoraServer
 
     if server is None:
-        server = AgoraServer(import_name)
+        server = Server(import_name)
 
     @server.get('/seeds/id/<string:sid>')
     def get_seed(sid):
@@ -146,8 +146,8 @@ def build(fountain, server=None, import_name=__name__):
     return server
 
 
-class FountainClient(AgoraClient, AbstractFountain):
-    def __init__(self, host='localhost', port=9002):
+class FountainClient(Client, AbstractFountain):
+    def __init__(self, host='localhost', port=5000):
         super(FountainClient, self).__init__(host, port)
         self.__types = {}
         self.__properties = {}
@@ -226,6 +226,6 @@ class FountainClient(AgoraClient, AbstractFountain):
         return response
 
 
-def client(host='localhost', port=9002):
+def client(host='localhost', port=5000):
     # type: (str, int) -> FountainClient
     return FountainClient(host, port)

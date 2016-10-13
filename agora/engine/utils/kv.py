@@ -17,24 +17,43 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
+#-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import logging
 
 import redis
 import redislite
+from redis.exceptions import BusyLoadingError, RedisError
 
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.engine.utils.kv')
 
 
+def __check_kv(kv):
+    # type: () -> None
+    reqs = 0
+    while True:
+        log.debug('Checking Redis... ({})'.format(reqs))
+        reqs += 1
+        try:
+            kv.echo('echo')
+            break
+        except BusyLoadingError as e:
+            log.warning(e.message)
+        except RedisError, e:
+            log.error('Redis is not available')
+            raise e
+    return kv
+
+
 def get_kv(persist_mode=False, redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None):
     if persist_mode:
         if redis_file is not None:
-            r = redislite.StrictRedis(redis_file)
+            kv = redislite.StrictRedis(redis_file)
         else:
             pool = redis.ConnectionPool(host=redis_host, port=redis_port, db=redis_db)
-            r = redis.StrictRedis(connection_pool=pool)
+            kv = redis.StrictRedis(connection_pool=pool)
     else:
-        r = redislite.StrictRedis()
-    return r
+        kv = redislite.StrictRedis()
+    return __check_kv(kv)

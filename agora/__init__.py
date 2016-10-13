@@ -24,7 +24,10 @@ from agora.collector import Collector
 from agora.collector.cache import RedisCache
 from agora.engine.fountain import Fountain
 from agora.engine.plan import Planner
-from agora.graph.fragment import Fragment
+from agora.graph import AgoraGraph
+from agora.server.fountain import FountainClient
+from agora.server.fountain import client as fc
+from agora.server.planner import client as pc
 from rdflib import Graph
 
 __author__ = 'Fernando Serena'
@@ -41,44 +44,62 @@ def setup_logging(level):
 
 
 class Agora(object):
-    def __init__(self):
-        self.__fountain = Fountain()
-        self.__planner = Planner(self.__fountain)
+    def __init__(self, **kwargs):
+        self._fountain = Fountain(**kwargs)
+        self._planner = Planner(self._fountain)
 
     @property
     def fountain(self):
-        return self.__fountain
+        return self._fountain
 
-    def query(self, query, cache=None, chunk_size=None):
-        collector = Collector(self.__planner, cache=cache)
-        fragment = Fragment(collector)
-        return fragment.query(query, chunk_size=chunk_size)
+    @property
+    def planner(self):
+        return self._planner
 
-    def fragment(self, query, cache=None):
-        collector = Collector(self.__planner, cache=cache)
-        fragment = Fragment(collector)
-        agp = fragment.agp(query)
-        gen_dict = collector.get_fragment_generator(*agp)
-        return gen_dict['generator']
+    def query(self, query, collector=None, cache=None, chunk_size=None, loader=None):
+        if collector is None:
+            collector = Collector(self._planner, cache=cache)
+        collector.loader = loader
+        graph = AgoraGraph(collector)
+        return graph.query(query, chunk_size=chunk_size)
 
-    def graph(self, query, cache=None):
-        collector = Collector(self.__planner, cache=cache)
-        fragment = Fragment(collector)
-        agp = fragment.agp(query)
+    def fragment(self, query, collector=None, cache=None, loader=None):
+        if collector is None:
+            collector = Collector(self._planner, cache=cache)
+        collector.loader = loader
+        graph = AgoraGraph(collector)
+        agp = graph.agp(query)
+        return collector.get_fragment_generator(*agp)
+
+    def agp_fragment(self, *agp, **kwargs):
+        collector = kwargs.get('collector', None)
+        loader = kwargs.get('loader', None)
+        cache = kwargs.get('cache', None)
+        if collector is None:
+            collector = Collector(self._planner, cache=cache)
+        collector.loader = loader
+        return collector.get_fragment_generator(*agp)
+
+    def graph(self, query, collector=None, cache=None, loader=None):
+        if collector is None:
+            collector = Collector(self._planner, cache=cache)
+        collector.loader = loader
+        graph = AgoraGraph(collector)
+        agp = graph.agp(query)
         gen_dict = collector.get_fragment_generator(*agp)
         graph = Graph()
-        for prefix, ns in fragment.namespaces():
+        for prefix, ns in graph.namespaces():
             graph.bind(prefix, ns)
         for c, s, p, o in gen_dict['generator']:
             graph.add((s, p, o))
         return graph
 
     def search_plan(self, query):
-        collector = Collector(self.__planner)
-        fragment = Fragment(collector)
-        return fragment.search_plan(query)
+        collector = Collector(self._planner)
+        graph = AgoraGraph(collector)
+        return graph.search_plan(query)
 
     def agp(self, query):
-        collector = Collector(self.__planner)
-        fragment = Fragment(collector)
-        return fragment.agp(query)
+        collector = Collector(self._planner)
+        graph = AgoraGraph(collector)
+        return graph.agp(query)

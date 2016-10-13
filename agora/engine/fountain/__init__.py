@@ -128,10 +128,10 @@ class AbstractFountain(object):
 
 
 class Fountain(AbstractFountain):
-    def __init__(self):
-
-        self.__schema = Schema()
-        self.__index = Index()
+    def __init__(self, persist_mode=False, base='store', path='fountain', redis_host='localhost', redis_port=6379,
+                 redis_db=1, redis_file=None):
+        self.__schema = Schema(persist_mode, base=base, path=path)
+        self.__index = Index(persist_mode, redis_host, redis_port, redis_db, redis_file)
         self.__index.schema = self.__schema
         self.__sm = SeedManager(self.__index)
         self.__pm = PathManager(self.__index, self.__sm)

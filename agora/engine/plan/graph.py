@@ -115,6 +115,7 @@ def graph_plan(plan, fountain):
         plan_graph.add((context, AGORA.definedBy, pattern_node))
         plan_graph.set((context, RDF.type, AGORA.SearchSpace))
         plan_graph.add((pattern_node, RDF.type, AGORA.TriplePattern))
+        plan_graph.add((pattern_node, RDFS.label, Literal(pattern_node.toPython())))
         (sub, pred, obj) = pattern
 
         if isinstance(sub, BNode):

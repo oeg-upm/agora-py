@@ -1,3 +1,4 @@
+# coding=utf-8
 """
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
   Ontology Engineering Group
@@ -19,50 +20,46 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 
-import calendar
 import logging
 import shutil
 import traceback
-from threading import Lock, Thread
+from threading import Thread
 
-import redislite
 import shortuuid
-from agora.engine.utils.graph import get_resource_cache, rmtree
+from agora.engine.utils.graph import get_triple_store
+from agora.engine.utils.kv import get_kv
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime as dt, timedelta as delta
 from rdflib import ConjunctiveGraph
+from rdflib.graph import Graph
 from redis.lock import Lock as RedisLock
 from time import sleep
 from werkzeug.http import parse_dict_header
 
 __author__ = 'Fernando Serena'
 
-
 log = logging.getLogger('agora.collector.cache')
+
+tpool = ThreadPoolExecutor(max_workers=4)
 
 
 class RedisCache(object):
     def __init__(self, persist_mode=False, key_prefix='', min_cache_time=5,
-                 base='cache', path='resources'):
-        self.__last_creation_ts = dt.utcnow()
-        self.__graph_dict = {}
-        self.__uuid_dict = {}
-        self.__gid_uuid_dict = {}
-        self.__lock = Lock()
+                 base='store', path='cache', redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None):
         self.__key_prefix = key_prefix
         self.__cache_key = '{}:cache'.format(key_prefix)
-        self.__gids_key = '{}:cache:gids'.format(self.__cache_key)
+        self.__gids_key = '{}:gids'.format(self.__cache_key)
         self.__persist_mode = persist_mode
         self.__min_cache_time = min_cache_time
         self.__base_path = base
-        self._r = redislite.StrictRedis()
+        self.__resource_path = path
+        self.__resource_cache = get_triple_store(persist_mode=persist_mode,
+                                                 base=base, path=path)
+        self._r = get_kv(persist_mode, redis_host, redis_port, redis_db, redis_file)
 
         self.__clear_cache()
         self.__resources_ts = {}
-        self.__resource_cache = get_resource_cache(persist_mode=persist_mode,
-                                                   base=base, path=path)
 
-        self.__pool = ThreadPoolExecutor(max_workers=4)
+        self.__enabled = True
         self.__purge_th = Thread(target=self.__purge)
         self.__purge_th.daemon = True
         self.__purge_th.start()
@@ -92,26 +89,32 @@ class RedisCache(object):
     def resource_cache(self, rc):
         self.__resource_cache = rc
 
+    @property
+    def persist_mode(self):
+        return self.__persist_mode
+
+    @property
+    def base_path(self):
+        return self.__base_path
+
     def __clear_cache(self):
-        cache_keys = list(self._r.keys('{}:cache*'.format(self.__key_prefix)))
+        cache_keys = list(self._r.keys('{}*lock*'.format(self.__key_prefix)))
         with self._r.pipeline(transaction=True) as p:
             for key in cache_keys:
                 p.delete(key)
             p.execute()
         log.debug('Cleared {} keys'.format(len(cache_keys)))
-        rmtree(self.__base_path)
+        # rmtree(self.__base_path)
 
-    @staticmethod
-    def __clean(name):
-        shutil.rmtree('store/resources/{}'.format(name))
+    def __clean(self, name):
+        shutil.rmtree('{}/{}'.format(self.__base_path, name))
 
-    def uuid_lock(self, uuid):
+    def gid_lock(self, uuid):
         lock_key = '{}:cache:{}:lock'.format(self.__key_prefix, uuid)
         return self._r.lock(lock_key, lock_class=RedisLock)
 
     def __purge(self):
-        while True:
-            self.__lock.acquire()
+        while self.__enabled:
             try:
                 obsolete = filter(lambda x: not self._r.exists('{}:cache:{}'.format(self.__key_prefix, x)),
                                   self._r.smembers(self.__cache_key))
@@ -120,155 +123,103 @@ class RedisCache(object):
                     with self._r.pipeline(transaction=True) as p:
                         p.multi()
                         log.debug('Removing {} resouces from cache...'.format(len(obsolete)))
-                        for uuid in obsolete:
-                            uuid_lock = self.uuid_lock(uuid)
-                            uuid_lock.acquire()
-                            try:
-                                gid = self._r.hget(self.__gids_key, uuid)
-                                counter_key = '{}:cache:{}:cnt'.format(self.__key_prefix, uuid)
+                        for gid in obsolete:
+                            gid_lock = self.gid_lock(gid)
+                            with gid_lock:
+                                counter_key = '{}:cache:{}:cnt'.format(self.__key_prefix, gid)
                                 usage_counter = self._r.get(counter_key)
                                 if usage_counter is None or int(usage_counter) <= 0:
                                     try:
-                                        self.__resource_cache.remove_context(self.__resource_cache.get_context(uuid))
-                                        p.srem(self.__cache_key, uuid)
-                                        p.hdel(self.__gids_key, uuid)
-                                        p.hdel(self.__gids_key, gid)
+                                        g = self.__resource_cache.get_context(gid)
+                                        self.__resource_cache.remove_context(g)
+                                        p.srem(self.__cache_key, gid)
                                         p.delete(counter_key)
-                                        g = self.__uuid_dict.get(uuid, None)
-                                        if g is not None:
-                                            del self.__uuid_dict[uuid]
-                                            del self.__graph_dict[g]
                                     except Exception, e:
                                         traceback.print_exc()
-                                        log.error('Purging resource {} with uuid {}'.format(gid, uuid))
+                                        log.error('Purging resource {}'.format(gid))
                                 p.execute()
-                            finally:
-                                uuid_lock.release()
             except Exception, e:
                 traceback.print_exc()
                 log.error(e.message)
-            finally:
-                self.__lock.release()
             sleep(1)
 
     def create(self, conjunctive=False, gid=None, loader=None, format=None):
-        lock = None
-        cached = False
-        temp_key = None
         p = self._r.pipeline(transaction=True)
         p.multi()
 
-        uuid = shortuuid.uuid()
-
         if conjunctive:
-            g = get_resource_cache(self.__persist_mode, base=self.__base_path, path=uuid)
-            # if self.__persist_mode:
-            #     g = ConjunctiveGraph('Sleepycat')
-            #     g.open('store/resources/{}'.format(uuid), create=True)
-            # else:
-            #     g = ConjunctiveGraph()
-            # g.store.graph_aware = False
-            self.__graph_dict[g] = uuid
-            self.__uuid_dict[uuid] = g
+            uuid = shortuuid.uuid()
+            g = get_triple_store(self.__persist_mode, base=self.__base_path, path=uuid)
             return g
         else:
-            g = None
-            try:
-                st_uuid = self._r.hget(self.__gids_key, gid)
-                if st_uuid is not None:
-                    cached = True
-                    uuid = st_uuid
-                    lock = self.uuid_lock(uuid)
-                    lock.acquire()
-                    g = self.__uuid_dict.get(uuid, None)
-                    lock.release()
+            temp_key = '{}:{}'.format(self.__cache_key, gid)
+            counter_key = '{}:cnt'.format(temp_key)
 
-                if st_uuid is None or g is None:
-                    st_uuid = None
-                    cached = False
-                    uuid = shortuuid.uuid()
-                    g = self.__resource_cache.get_context(uuid)
+            lock = self.gid_lock(gid)
+            with lock:
+                g = self.__resource_cache.get_context(gid)
+                cached = self._r.sismember(self.__cache_key, gid)
+                if cached:
+                    ttl = self._r.get(temp_key)
+                    if ttl is not None:
+                        p.incr(counter_key)
+                        p.execute()
+                        return g, int(ttl)
+                    else:
+                        p.srem(self.__cache_key, gid)
+                        p.delete(counter_key)
+                        p.execute()
 
-                temp_key = '{}:cache:{}'.format(self.__key_prefix, uuid)
-                counter_key = '{}:cnt'.format(temp_key)
+                log.debug(u'Caching {}'.format(gid))
+                response = loader(gid, format)
+                if isinstance(response, bool):
+                    return response
 
-                if st_uuid is None:
-                    p.delete(counter_key)
-                    p.hset(self.__gids_key, uuid, gid)
-                    p.hset(self.__gids_key, gid, uuid)
-                    p.sadd(self.__cache_key, uuid)
-                    p.set(temp_key, '')  # Prepare temporal key to avoid race conditions on purging
-                    p.execute()
-                    self.__last_creation_ts = dt.utcnow()
-                    p.incr(counter_key)
-                lock = self.uuid_lock(uuid)
-                lock.acquire()
-            except Exception, e:
-                log.error(e.message)
-                traceback.print_exc()
-        if g is not None:
-            self.__graph_dict[g] = uuid
-            self.__uuid_dict[uuid] = g
-
-        try:
-            if cached:
-                return g
-
-            log.debug('Caching {}'.format(gid.encode('utf8', 'replace')))
-            response = loader(gid, format)
-            if not isinstance(response, bool):
+                ttl = self.__min_cache_time
                 source, headers = response
-                g.parse(source=source, format=format)
-                if not self._r.get(temp_key):
-                    cache_control = headers.get('Cache-Control', None)
-                    ttl = self.__min_cache_time
-                    if cache_control is not None:
-                        cache_dict = parse_dict_header(cache_control)
-                        ttl = int(cache_dict.get('max-age', ttl))
-                    ttl_ts = calendar.timegm((dt.utcnow() + delta(ttl)).timetuple())
-                    p.set(temp_key, ttl_ts)
-                    p.expire(temp_key, ttl)
-                    p.execute()
+                if not isinstance(source, Graph):
+                    try:
+                        g.parse(source=source, format=format)
+                    except Exception as e:
+                        print e.message
 
-                return g
-            else:
-                p.hdel(self.__gids_key, gid)
-                p.hdel(self.__gids_key, uuid)
-                p.srem(self.__cache_key, uuid)
-                counter_key = '{}:cache:{}:cnt'.format(self.__key_prefix, uuid)
+                else:
+                    if g != source:
+                        g.__iadd__(source)
+
+                cache_control = headers.get('Cache-Control', None)
+                if cache_control is not None:
+                    cache_dict = parse_dict_header(cache_control)
+                    ttl = int(cache_dict.get('max-age', ttl))
+
+                # Let's create a new one
                 p.delete(counter_key)
+                p.sadd(self.__cache_key, gid)
+                p.incr(counter_key)
+
+                p.set(temp_key, ttl)
+                p.expire(temp_key, ttl)
                 p.execute()
-                del self.__graph_dict[g]
-                del self.__uuid_dict[uuid]
-                return response
-        finally:
-            p.execute()
-            if lock is not None:
-                lock.release()
+
+                return g, ttl
 
     def release(self, g):
-        lock = None
-        try:
-            if g in self.__graph_dict:
-                if isinstance(g, ConjunctiveGraph):
-                    if self.__persist_mode:
-                        g.close()
-                        self.__pool.submit(self.__clean, self.__graph_dict[g])
-                    else:
-                        g.remove((None, None, None))
-                        g.close()
-                else:
-                    uuid = self.__graph_dict[g]
-                    if uuid is not None:
-                        lock = self.uuid_lock(uuid)
-                        lock.acquire()
-                        if self._r.sismember(self.__cache_key, uuid):
-                            self._r.decr('{}:cache:{}:cnt'.format(self.__key_prefix, uuid))
-        finally:
-            if lock is not None:
-                lock.release()
+        if isinstance(g, ConjunctiveGraph):
+            if self.__persist_mode:
+                g.close()
+                tpool.submit(self.__clean, g.identifier.toPython())
+            else:
+                g.remove((None, None, None))
+                g.close()
+        else:
+            gid = g.identifier.toPython()
+            with self.gid_lock(gid):
+                if self._r.sismember(self.__cache_key, gid):
+                    self._r.decr('{}:{}:cnt'.format(self.__cache_key, gid))
 
-    def __delete_linked_resource(self, g, subject):
-        for (s, p, o) in g.triples((subject, None, None)):
-            self.__delete_linked_resource(g, o)
-            g.remove((s, p, o))
+    def close(self):
+        self.__enabled = False
+        tpool.shutdown(wait=True)
+
+    def __del__(self):
+        self.close()

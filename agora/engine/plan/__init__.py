@@ -22,6 +22,7 @@
 import logging
 import traceback
 from abc import abstractmethod
+from datetime import datetime
 
 import agora.engine.plan.join
 from agora.engine.plan.agp import AgoraGP
@@ -96,8 +97,7 @@ class Plan(object):
 
             self.__g_plan = graph_plan(self.__plan, self.__fountain)
         except TypeError, e:
-            traceback.print_exc()
-            raise NameError
+            raise NameError(e.message)
 
     @property
     def json(self):

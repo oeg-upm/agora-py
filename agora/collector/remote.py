@@ -18,19 +18,29 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+from agora.collector import AbstractCollector
+from agora.server.fragment import client as fc
+from agora.server.planner import client as pc
 
-__author__ = 'Fernando Serena'
+__author__ = "Fernando Serena"
 
 
-def tp_parts(tp):
-    """
-    :param tp: A triple pattern string
-    :return: A string-based 3-tuple like (subject, predicate, object)
-    """
-    if tp.endswith('"'):
-        parts = [tp[tp.find('"'):]]
-        st = tp.replace(parts[0], '').rstrip()
-        parts = st.split(" ") + parts
-    else:
-        parts = tp.split(' ')
-    return tuple(parts)
+class RemoteCollector(AbstractCollector):
+    def __init__(self, host='localhost', port=9002, planner=None):
+        # type: (str, int, AbstractPlanner) -> RemoteCollector
+        self.__planner = pc(host, port) if planner is None else planner
+        self.__fragment = fc(host, port)
+
+    def get_fragment(self, *tps):
+        generator = self.__fragment.agp_fragment(*tps)
+        return generator
+
+    def get_fragment_generator(self, *tps):
+        plan = self.__planner.make_plan(*tps)
+        generator = self.__fragment.agp_fragment(*tps)
+        fragment_dict = {'prefixes': self.prefixes, 'plan': plan, 'generator': generator}
+        return fragment_dict
+
+    @property
+    def prefixes(self):
+        return self.__planner.fountain.prefixes

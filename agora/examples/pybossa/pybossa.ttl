@@ -1,0 +1,77 @@
+@prefix pb: <http://pybossa.com/vocabulary#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<http://pybossa.com/vocabulary> rdf:type owl:Ontology .
+
+pb:Service a owl:Class .
+
+pb:Entity a owl:Class ;
+        rdfs:subClassOf [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty pb:identifier ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty pb:creationDate ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ] .
+
+pb:Project rdfs:subClassOf pb:Entity,
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty pb:allowAnonymous ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty pb:category ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty pb:name ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ] .
+
+pb:Category a owl:Class .
+
+pb:Task rdfs:subClassOf pb:Entity,
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty pb:status ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ] .
+
+pb:identifier a owl:DatatypeProperty ;
+    rdfs:range xsd:string .
+
+pb:name a owl:DatatypeProperty ;
+    rdfs:range xsd:string .
+
+pb:exposesProject a owl:ObjectProperty ;
+    rdfs:domain pb:Service ;
+    rdfs:range pb:Project.
+
+pb:offersTask a owl:ObjectProperty ;
+    rdfs:domain pb:Project ;
+    rdfs:range pb:Task.
+
+pb:allowAnonymous a owl:DatatypeProperty ;
+    rdfs:domain pb:Project ;
+    rdfs:range xsd:boolean .
+
+pb:status a owl:DatatypeProperty ;
+    rdfs:domain pb:Task ;
+    rdfs:range xsd:string .
+
+pb:category a owl:ObjectProperty ;
+    rdfs:range pb:Category .
+
+pb:creationDate a owl:DatatypeProperty ;
+    rdfs:domain pb:Project ;
+    rdfs:range xsd:dateTime .
