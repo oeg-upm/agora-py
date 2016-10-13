@@ -68,19 +68,17 @@ def chunks(l, n=None):
     finished = False
     while not finished:
         chunk = []
-        start = datetime.now()
-        context, s, p, o = l.next()
-        last_ctx = context
-        chunk.append((s, p, o))
         try:
-            while context == last_ctx or len(chunk) < n:
-                context, s, p, o = l.next()
-                chunk.append((s, p, o))
+            context, s, p, o = l.next()
+            # last_ctx = context
+            chunk.append((s, p, o))
+            if n != len(chunk):
+                while len(chunk) < n:
+                    context, s, p, o = l.next()
+                    chunk.append((s, p, o))
         except StopIteration:
             finished = True
-        log.debug(
-            'Took {}ms to collect a fragment chunk of {} triples'.format((datetime.now() - start).total_seconds(),
-                                                                          len(chunk)))
+
         yield chunk
 
 
