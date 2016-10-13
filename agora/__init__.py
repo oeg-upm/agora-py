@@ -59,14 +59,16 @@ class Agora(object):
     def query(self, query, collector=None, cache=None, chunk_size=None, loader=None):
         if collector is None:
             collector = Collector(self._planner, cache=cache)
-        collector.loader = loader
+        if loader is not None:
+            collector.loader = loader
         graph = AgoraGraph(collector)
         return graph.query(query, chunk_size=chunk_size)
 
     def fragment(self, query, collector=None, cache=None, loader=None):
         if collector is None:
             collector = Collector(self._planner, cache=cache)
-        collector.loader = loader
+        if loader is not None:
+            collector.loader = loader
         graph = AgoraGraph(collector)
         agp = graph.agp(query)
         return collector.get_fragment_generator(*agp)
@@ -77,13 +79,15 @@ class Agora(object):
         cache = kwargs.get('cache', None)
         if collector is None:
             collector = Collector(self._planner, cache=cache)
-        collector.loader = loader
+        if loader is not None:
+            collector.loader = loader
         return collector.get_fragment_generator(*agp)
 
     def graph(self, query, collector=None, cache=None, loader=None):
         if collector is None:
             collector = Collector(self._planner, cache=cache)
-        collector.loader = loader
+        if loader is not None:
+            collector.loader = loader
         graph = AgoraGraph(collector)
         agp = graph.agp(query)
         gen_dict = collector.get_fragment_generator(*agp)
