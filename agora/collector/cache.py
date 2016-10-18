@@ -109,15 +109,16 @@ class RedisCache(object):
     def __clean(self, name):
         shutil.rmtree('{}/{}'.format(self.__base_path, name))
 
-    def gid_lock(self, uuid):
-        lock_key = '{}:cache:{}:lock'.format(self.__key_prefix, uuid)
+    def gid_lock(self, gid):
+        lock_key = '{}:cache:{}:lock'.format(self.__key_prefix, gid)
         return self._r.lock(lock_key, lock_class=RedisLock)
 
     def __purge(self):
         while self.__enabled:
             try:
-                obsolete = filter(lambda x: not self._r.exists('{}:cache:{}'.format(self.__key_prefix, x)),
-                                  self._r.smembers(self.__cache_key))
+                obsolete = filter(
+                    lambda x: not self._r.exists('{}:cache:{}'.format(self.__key_prefix, x)),
+                    self._r.smembers(self.__cache_key))
 
                 if obsolete:
                     with self._r.pipeline(transaction=True) as p:
@@ -164,13 +165,15 @@ class RedisCache(object):
                     if ttl is not None:
                         p.incr(counter_key)
                         p.execute()
-                        return g, int(ttl)
+                        g_copy = Graph()
+                        g_copy.__iadd__(g)
+                        return g_copy, int(ttl)
                     else:
                         p.srem(self.__cache_key, gid)
                         p.delete(counter_key)
                         p.execute()
 
-                log.debug(u'Caching {}'.format(gid))
+                log.debug('Caching {}'.format(gid))
                 response = loader(gid, format)
                 if isinstance(response, bool):
                     return response
@@ -201,7 +204,9 @@ class RedisCache(object):
                 p.expire(temp_key, ttl)
                 p.execute()
 
-                return g, ttl
+                g_copy = Graph()
+                g_copy.__iadd__(g)
+                return g_copy, ttl
 
     def release(self, g):
         if isinstance(g, ConjunctiveGraph):
@@ -216,6 +221,8 @@ class RedisCache(object):
             with self.gid_lock(gid):
                 if self._r.sismember(self.__cache_key, gid):
                     self._r.decr('{}:{}:cnt'.format(self.__cache_key, gid))
+                g.close()
+                g.remove((None, None, None))
 
     def close(self):
         self.__enabled = False
