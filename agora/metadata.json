@@ -3,5 +3,5 @@
   "author": "Fernando Serena",
   "email": "fserena@fi.upm.es",
   "github": "https://github.com/fserena/agora-py",
-  "description": "The Agora framework for ontology paths discovery, search plan generation and fragment collection"
+  "description": "A Python library for Web-scale Ontology-driven Access to Distributed Linked Data"
 }

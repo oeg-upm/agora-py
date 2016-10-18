@@ -35,8 +35,6 @@ dbp:birthName rdf:type owl:DatatypeProperty ;
                            owl:onProperty :hasFilm ;
                            owl:someValuesFrom dbpedia-owl:Film
                          ] .
-dbpedia-owl:Actor rdf:type owl:Class ;
-                  rdfs:subClassOf foaf:Person .
 dbpedia-owl:Company rdf:type owl:Class ;
                     rdfs:subClassOf [ rdf:type owl:Restriction ;
                                       owl:onProperty dbpedia-owl:location ;
@@ -54,7 +52,7 @@ dbpedia-owl:Film rdf:type owl:Class ;
                                  ] ,
                                  [ rdf:type owl:Restriction ;
                                    owl:onProperty dbpedia-owl:starring ;
-                                   owl:someValuesFrom dbpedia-owl:Actor
+                                   owl:someValuesFrom foaf:Person
                                  ] ,
                                  [ rdf:type owl:Restriction ;
                                    owl:onProperty dbpedia-owl:releaseDate ;

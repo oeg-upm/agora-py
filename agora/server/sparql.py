@@ -49,7 +49,7 @@ def result(row):
     def r_dict(l):
         value = row[l]
         type = value_type(value)
-        res = {"type": type, "value": str(value.toPython())}
+        res = {"type": type, "value": value.toPython()}
         if type == 'literal':
             if value.datatype:
                 res['datatype'] = value.datatype.toPython()
@@ -57,7 +57,7 @@ def result(row):
                 res['xml:lang'] = str(value.language)
         return res
 
-    return {l: r_dict(l) for l in row.labels}
+    return {l: r_dict(l) for l in row.labels if row[l] is not None}
 
 
 def build(agora, server=None, import_name=__name__, query_function=None):
@@ -79,7 +79,7 @@ def build(agora, server=None, import_name=__name__, query_function=None):
                     first = False
                 else:
                     yield ',\n'
-                yield '      {}'.format(json.dumps(result(row)))
+                yield '      {}'.format(json.dumps(result(row)).encode('utf-8'))
             if not first:
                 yield '\n    ]\n  }\n'
             yield '}'

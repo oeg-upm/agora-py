@@ -18,5 +18,25 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+from SPARQLWrapper import JSON
+from SPARQLWrapper import SPARQLWrapper
 
 __author__ = 'Fernando Serena'
+
+
+def load_films_from_dbpedia():
+    """
+    Get movie resources from dbpedia
+    :return: movies generator
+    """
+    sparql = SPARQLWrapper("http://es.dbpedia.org/sparql")
+    sparql.setReturnFormat(JSON)
+
+    sparql.setQuery("""
+           SELECT distinct ?film
+           WHERE {?film a dbpedia-owl:Film} LIMIT 10
+       """)
+    results = sparql.query().convert()
+
+    for result in results["results"]["bindings"]:
+        yield result["film"]["value"]

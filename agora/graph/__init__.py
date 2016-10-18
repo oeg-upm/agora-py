@@ -86,7 +86,7 @@ class AgoraGraph(Graph):
         self.remove((None, None, None))
         for context, s, p, o in gen:
             log.debug('Got triple: {} {} {} .'.format(s.encode('utf8', 'replace'), p.encode('utf8', 'replace'),
-                                                     o.encode('utf8', 'replace')))
+                                                      o.encode('utf8', 'replace')))
             self.add((s, p, o))
             subject = context[0] if tps is None else tps[str(context)][0]
             if subject in self.__roots:
