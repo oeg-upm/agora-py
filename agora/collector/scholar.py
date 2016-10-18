@@ -238,7 +238,7 @@ class Fragment(object):
             else:
                 pipe.delete(updated_key)
             pipe.execute()
-        log.debug('fragment {} will be up-to-date for {}s'.format(self.fid, ttl))
+        log.info('Fragment {} will be up-to-date for {}s'.format(self.fid, ttl))
 
     @property
     def collecting(self):
@@ -289,8 +289,8 @@ class Fragment(object):
                         yield c, s, p, o
         else:
             try:
-                listen_queue = Queue(maxsize=10)
-                until = calendar.timegm(datetime.utcnow().timetuple()) + 10
+                until = calendar.timegm(datetime.utcnow().timetuple())
+                listen_queue = Queue(maxsize=100)
                 self.__observers.add(listen)
                 for quad in self.stream.get(until):
                     yield quad
@@ -333,24 +333,21 @@ class Fragment(object):
         collect_dict = collector.get_fragment_generator(*self.agp)
         self.plan = collect_dict['plan']
         back_id = uuid()
+        n_triples = 0
         for c, s, p, o in collect_dict['generator']:
             tp = self.__tp_map[str(c)]
             self.stream.put(str(c), (s, p, o))
-            self.triples.get_context(back_id).add((s, p, o))
-            self.triples.get_context(self.fid).add((s, p, o))
             self.triples.get_context(str((back_id, tp))).add((s, p, o))
             self.__notify((str(c), s, p, o))
+            n_triples += 1
         with self.lock:  # Replace graph store and update ttl
-            self.triples.remove_context(self.triples.get_context(self.fid))
-            self.triples.get_context(self.fid).__iadd__(self.triples.get_context(back_id))
-            self.triples.remove_context(self.triples.get_context(back_id))
             for tp in self.__tp_map.values():
                 self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
                 self.triples.get_context(str((self.fid, tp))).__iadd__(self.triples.get_context(str((back_id, tp))))
                 self.triples.remove_context(self.triples.get_context(str((back_id, tp))))
             self.updated_for(collect_dict.get('ttl')())
             self.collecting = False
-        log.info('ended collecting fragment {}'.format(self.fid))
+        log.info('Finished fragment collection: {} ({} triples)'.format(self.fid, n_triples))
 
     def remove(self):
         # type: () -> None
@@ -366,7 +363,6 @@ class Fragment(object):
 
         # Remove graph contexts
         if self.__tp_map:
-            self.triples.remove_context(self.triples.get_context(self.fid))
             for tp in self.__tp_map.values():
                 self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
 
@@ -465,7 +461,7 @@ class Scholar(Collector):
                 if not fragment.updated and not fragment.collecting:
                     collector = Collector(self.planner, self.cache)
                     collector.loader = self.loader
-                    log.info('Starting collection of fragment {}'.format(fragment.fid))
+                    log.info('Starting fragment collection: {}'.format(fragment.fid))
                     try:
                         futures[fragment.fid] = tpool.submit(fragment.populate, collector)
                     except RuntimeError as e:
@@ -473,9 +469,8 @@ class Scholar(Collector):
                     # fragment.lock.release()
 
             if futures:
-                log.info('waiting for running fragment collections to end: {}'.format(len(futures)))
+                log.info('Waiting for: {} collections'.format(len(futures)))
                 wait(futures.values())
-                log.info('tasks done: {}'.format(len(futures)))
                 for fragment_id, future in futures.items():
                     exception = future.exception()
                     if exception is not None:
