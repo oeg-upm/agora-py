@@ -38,8 +38,9 @@ from datetime import datetime as dt, datetime
 from rdflib import ConjunctiveGraph, RDF, URIRef
 from rdflib import Graph
 from requests.utils import parse_dict_header
+import networkx as nx
 
-pool = ThreadPoolExecutor(max_workers=20)
+pool = ThreadPoolExecutor(max_workers=8)
 
 __author__ = 'Fernando Serena'
 
@@ -87,17 +88,17 @@ def get_resource_ttl(headers):
 
 
 def get_content(uri, format):
+    log.debug('HTTP GET {}'.format(uri))
     try:
-        log.debug(u'[Dereference][START] {}'.format(uri))
         response = requests.get(uri, headers={'Accept': _accept_mimes[format]}, timeout=30)
     except requests.Timeout:
-        log.debug(u'[Dereference][TIMEOUT][GET] {}'.format(uri))
+        log.debug('[Dereference][TIMEOUT][GET] {}'.format(uri))
         return True
     except UnicodeEncodeError:
-        log.debug(u'[Dereference][ERROR][ENCODE] {}'.format(uri))
+        log.debug('[Dereference][ERROR][ENCODE] {}'.format(uri))
         return True
     except Exception:
-        log.debug(u'[Dereference][ERROR][GET] {}'.format(uri))
+        log.debug('[Dereference][ERROR][GET] {}'.format(uri))
         return True
 
     if response.status_code == 200:
@@ -105,22 +106,22 @@ def get_content(uri, format):
             return StringIO.StringIO(response.content), response.headers
         except SyntaxError:
             traceback.print_exc()
-            log.error(u'[Dereference][ERROR][PARSE] {}'.format(uri))
+            log.error('[Dereference][ERROR][PARSE] {}'.format(uri))
             return False
         except ValueError:
             traceback.print_exc()
-            log.debug(u'[Dereference][ERROR][VAL] {}'.format(uri))
+            log.debug('[Dereference][ERROR][VAL] {}'.format(uri))
             return False
         except DBNotFoundError:
             # Ignore this exception... it is raised due to a stupid problem with prefixes
             return True
         except SAXParseException:
             traceback.print_exc()
-            log.error(u'[Dereference][ERROR][SAX] {}'.format(uri))
+            log.error('[Dereference][ERROR][SAX] {}'.format(uri))
             return False
         except Exception:
             traceback.print_exc()
-            log.error(u'[Dereference][ERROR] {}'.format(uri))
+            log.error('[Dereference][ERROR] {}'.format(uri))
             return True
     else:
         return True
@@ -135,6 +136,7 @@ class PlanExecutor(object):
         self.__node_patterns = {}
         self.__spaces = None
         self.__patterns = {}
+        self.__property_paths = nx.DiGraph()
         self.__subjects_to_ignore = {}
         self.__resource_queue = {}
         self.__resource_lock = RLock()
@@ -162,16 +164,19 @@ class PlanExecutor(object):
             """
             Performs a backward search from a list of pattern nodes and assigns a set of search spaces
             to all encountered nodes.
-            :param nodes: List of pattern nodes that belongs to a search space
-            :param space: List of  search space id
-            :return:
             """
             for n in nodes:
                 if n not in self.__node_spaces:
                     self.__node_spaces[n] = set([])
                 self.__node_spaces[n].add(space)
-                pred_nodes = self.__plan_graph.subjects(AGORA.next, n)
-                __decorate_nodes(pred_nodes, space)
+                pred_nodes = list(self.__plan_graph.subjects(AGORA.next, n))
+                for pred in pred_nodes:
+                    links = list(self.__plan_graph.objects(subject=n, predicate=AGORA.onProperty))
+                    expected_types = list(self.__plan_graph.objects(subject=n, predicate=AGORA.expectedType))
+                    link = links.pop() if links else None
+                    self.__property_paths.add_edge(pred, n, link=link, expected_types=expected_types)
+                if pred_nodes:
+                    __decorate_nodes(pred_nodes, space)
 
         # Extract all search spaces in the plan and build a dictionary of subjects-to-ignore per each of them.
         # Ignored subjects are those that won't be dereferenced due to a explicit graph pattern (object) filter,
@@ -215,6 +220,8 @@ class PlanExecutor(object):
                 if n not in self.__node_patterns:
                     self.__node_patterns[n] = set([])
                 self.__node_patterns[n].add(tp)
+
+            self.__property_paths.add_nodes_from(nodes)
             __decorate_nodes(nodes, space)
 
     def get_fragment(self, **kwargs):
@@ -309,6 +316,9 @@ class PlanExecutor(object):
                 return
 
             uri = uri.toPython()
+            uri = uri.encode('utf-8')
+
+            # log.debug(u'Dereferencing {}'.format(uri))
 
             def treat_resource_content(parse_format):
                 try:
@@ -324,9 +334,7 @@ class PlanExecutor(object):
                 g, ttl = resource
                 with self.__resource_lock:
                     __update_fragment_ttl()
-                #     print 'old ttl= ', self.__fragment_ttl,
                     self.__fragment_ttl = min(self.__fragment_ttl, ttl)
-                #     print 'new ttl= ', self.__fragment_ttl
 
                 try:
                     for triple in g:
@@ -431,21 +439,21 @@ class PlanExecutor(object):
 
             try:
                 # Get the sorted list of current node's successors
-                nxt = sorted(list(self.__plan_graph.objects(node, AGORA.next)),
-                             key=lambda x: node_has_filter(x), reverse=True)
+                try:
+                    nxt = sorted(list(self.__property_paths.successors(node)),
+                                 key=lambda x: node_has_filter(x), reverse=True)
+                except nx.NetworkXError, e:
+                    print e.message
+                    print node
+                    nxt = None
 
                 # Per each successor...
                 for n in nxt:
                     if seed_space in self.__node_spaces[n]:
                         node_patterns = self.__node_patterns.get(n, [])
-
-                        expected_types = list(self.__plan_graph.objects(subject=n, predicate=AGORA.expectedType))
-                        # In case the node is not a leaf, 'onProperty' tells which is the next link to follow
-                        try:
-                            link = list(self.__plan_graph.objects(subject=n, predicate=AGORA.onProperty)).pop()
-                        except IndexError:
-                            link = None
-
+                        edge_data = self.__property_paths.get_edge_data(node, n)
+                        expected_types = edge_data.get('expect_types', None)
+                        link = edge_data.get('link', None)
                         filter_next_seeds = set([])
                         next_seeds = set([])
                         # If the current node is a pattern node, it must search for triples to yield
@@ -541,11 +549,23 @@ class PlanExecutor(object):
                                     except Queue.Full:
                                         # If all threads are busy...I'll do it myself
                                         __follow_node(n, tree_graph, seed_space, s)
-                                    except Queue.Empty:
-                                        pass
 
                                 wait(threads)
                                 [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+
+                                # for s in chunk:
+                                #     try:
+                                #         workers_queue.put_nowait(s)
+                                #         future = pool.submit(__follow_node, n, tree_graph, seed_space, s)
+                                #         threads.append(future)
+                                #     except Queue.Full:
+                                #         # If all threads are busy...I'll do it myself
+                                #         __follow_node(n, tree_graph, seed_space, s)
+                                #     except Queue.Empty:
+                                #         pass
+                                #
+                                # wait(threads)
+                                # [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
                         except (IndexError, KeyError):
                             pass
             except Queue.Full:
@@ -593,9 +613,14 @@ class PlanExecutor(object):
                             # Prepare the list of seeds to start the exploration with, taking into account all
                             # search spaces that were defined
                             s_seeds = set(seeds)
+                            futures = []
                             for sp in self.__spaces:
                                 for seed in s_seeds:
-                                    __follow_node(tree, tree_graph, sp, seed)
+                                    futures.append(pool.submit(__follow_node, tree, tree_graph, sp, seed))
+                                    if len(futures) >= workers:
+                                        wait(futures)
+                                        futures = []
+                            wait(futures)
                     finally:
                         __release_graph(tree_graph)
 
