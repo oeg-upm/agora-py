@@ -35,6 +35,7 @@ class ResourceWrapper(object):
                           'wsgi.url_scheme': url_scheme,
                           'REQUEST_METHOD': 'GET'}
 
+        self.__callback_names = {}
         self.__url_map = Map()
         self.__adapter = self.__url_map.bind_to_environ(self.__environ)
         self.__base = '{}://{}'.format(url_scheme, server_name)
@@ -46,6 +47,8 @@ class ResourceWrapper(object):
         self.__url_map.add(r)
 
     def url_for(self, callback, **values):
+        if isinstance(callback, str):
+            callback = self.__callback_names[callback]
         return urljoin(self.__base, self.__adapter.build(callback, values))
 
     @property
@@ -61,6 +64,7 @@ class ResourceWrapper(object):
 
     def intercept(self, rule):
         def decorator(f):
+            self.__callback_names[f.func_name] = f
             self.add_rule(rule, f)
             return f
 
