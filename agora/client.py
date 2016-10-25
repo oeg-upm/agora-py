@@ -18,11 +18,14 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
-
+import itertools
 from agora.collector.remote import RemoteCollector
 from agora.graph import AgoraGraph
 from agora.server.fountain import client as fc
 from agora.server.planner import client as pc
+
+from agora.server.fragment import client as cc
+from rdflib import Graph
 
 __author__ = 'Fernando Serena'
 
@@ -33,6 +36,7 @@ class AgoraClient(object):
         self._fountain = fc(host=fountain_host, port=fountain_port)
         self._planner = pc(host=planner_host, port=planner_port, fountain=self._fountain)
         self._collector = RemoteCollector(fragment_host, fragment_port, planner=self._planner)
+        self._fragment = cc(host=fragment_host, port=fragment_port)
 
     @property
     def fountain(self):
@@ -46,10 +50,50 @@ class AgoraClient(object):
         graph = AgoraGraph(self._collector)
         return graph.query(query, chunk_size=chunk_size)
 
-    def fragment(self, query):
-        graph = AgoraGraph(self._collector)
-        agp = graph.agp(query)
-        return self._collector.get_fragment_generator(*agp)
+    def fragment(self, query=None, agps=None):
+        if not (query or agps):
+            return
 
-    def agp_fragment(self, *agp):
-        return self._collector.get_fragment_generator(*agp)
+        graph = AgoraGraph(self._collector)
+        result = Graph(namespace_manager=graph.namespace_manager)
+
+        if query:
+            for c, s, p, o in self._fragment.fragment(query):
+                result.add((s, p, o))
+        else:
+            for agp in agps:
+                for c, s, p, o in graph.collector.get_fragment_generator(agp)['generator']:
+                    result.add((s, p, o))
+        return result
+
+    def fragment_generator(self, query=None, agps=None):
+        def comp_gen(gens):
+            for gen in [g['generator'] for g in gens]:
+                for q in gen:
+                    yield q
+
+        if query is not None:
+            generator = self._fragment.fragment(query)
+            plan = self.search_plan(query)
+        else:
+            graph = AgoraGraph(self._collector)
+            generators = [graph.collector.get_fragment_generator(agp) for agp in agps]
+            plan = Graph(namespace_manager=graph.namespace_manager)
+            for g in generators:
+                plan.__iadd__(g['plan'])
+            generator = comp_gen(generators)
+
+        prefixes = dict(plan.namespaces())
+
+        return {'prefixes': prefixes, 'plan': plan, 'generator': generator}
+
+    def search_plan(self, query):
+        graph = AgoraGraph(self._collector)
+        comp_plan = Graph(namespace_manager=graph.namespace_manager)
+        for agp in graph.agps(query):
+            comp_plan.__iadd__(self._planner.make_plan(agp))
+        return comp_plan
+
+    def agps(self, query):
+        graph = AgoraGraph(self._collector)
+        return graph.agps(query)

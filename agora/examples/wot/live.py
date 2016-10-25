@@ -51,9 +51,7 @@ q4 = """SELECT ?s ?v WHERE { ?s rdfs:label "tamb" ;
 
 elapsed = []
 
-print agora.search_plan(q3).serialize(format='turtle')
-
-for query in [q, q2, q3, q4]:
+for query in [q, q2, q3, q4] * 2:
     pre = datetime.now()
     for row in agora.query(query):
         for label in row.labels:

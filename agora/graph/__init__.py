@@ -22,12 +22,20 @@
 import logging
 
 import rdflib
+from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
+from rdflib import BNode
 from rdflib import Graph
+from rdflib import Literal
 from rdflib import RDF
 from rdflib import RDFS
 from rdflib import URIRef
+from rdflib import Variable
 from rdflib import plugin
+import networkx as nx
+from agora.graph.processor import extract_bgps
+
+import pyparsing
 
 __author__ = 'Fernando Serena'
 
@@ -36,8 +44,10 @@ log = logging.getLogger('agora.graph.processor')
 plugin.register('agora', rdflib.query.Processor, 'agora.graph.processor', 'FragmentProcessor')
 plugin.register('agora', rdflib.query.Result, 'agora.graph.processor', 'FragmentResult')
 
+pyparsing.ParserElement.enablePackrat()
 
-def extract_tp_from_plan(plan):
+
+def extract_tps_from_plan(plan):
     # type: (Graph) -> dict
     """
 
@@ -48,9 +58,9 @@ def extract_tp_from_plan(plan):
     def extract_node_id(node):
         nid = node
         if (node, RDF.type, AGORA.Variable) in plan:
-            nid = list(plan.objects(node, RDFS.label)).pop()
+            nid = Variable(list(plan.objects(node, RDFS.label)).pop())
         elif (node, RDF.type, AGORA.Literal) in plan:
-            nid = list(plan.objects(node, AGORA.value)).pop()
+            nid = Literal(list(plan.objects(node, AGORA.value)).pop())
         return nid
 
     def process_tp_node(tpn):
@@ -58,9 +68,9 @@ def extract_tp_from_plan(plan):
         subject_node = list(plan.objects(tpn, AGORA.subject)).pop()
         object_node = list(plan.objects(tpn, AGORA.object)).pop()
         subject = extract_node_id(subject_node)
-        obj = extract_node_id(object_node)
+        object = extract_node_id(object_node)
 
-        return str(subject), predicate.n3(plan.namespace_manager), str(obj)
+        return TP(subject, predicate, object)
 
     return {str(list(plan.objects(tpn, RDFS.label)).pop()): process_tp_node(tpn) for tpn in
             plan.subjects(RDF.type, AGORA.TriplePattern)}
@@ -71,27 +81,55 @@ class AgoraGraph(Graph):
         super(AgoraGraph, self).__init__()
         self.__collector = collector
         self.__plan = None
-        self.__roots = set([])
+        self.__collected = []
         for prefix, ns in collector.prefixes.items():
             self.bind(prefix, ns)
 
-    def gen(self, *tps):
-        # type: (list) -> (Graph, iter)
-        gen_dict = self.__collector.get_fragment_generator(*tps)
-        self.__plan = gen_dict.get('plan', None)
-        tps = extract_tp_from_plan(self.__plan) if self.__plan is not None else None
-        return self.__plan, self._produce(gen_dict['generator'], tps=tps)
+    def __build_agp(self, bgp):
+        def tp_part(term):
+            if isinstance(term, Variable) or isinstance(term, BNode):
+                return '?{}'.format(str(term))
+            elif isinstance(term, URIRef):
+                return '<{}>'.format(term)
+            elif isinstance(term, Literal):
+                return term.n3(namespace_manager=self.namespace_manager)
 
-    def _produce(self, gen, tps=None):
-        self.remove((None, None, None))
+        tps = set([])
+        for s, p, o in bgp:
+            s_elm = tp_part(s)
+            if p == RDF.type:
+                o_elm = self.qname(o)
+                p_elm = 'a'
+            else:
+                p_elm = self.qname(p)
+                o_elm = tp_part(o)
+
+            tps.add('{} {} {}'.format(s_elm, p_elm, o_elm))
+        return AGP(tps, self.__collector.prefixes)
+
+    def gen(self, bgp):
+        # type: (list) -> (Graph, iter)
+        if bgp not in self.__collected:
+            agp = self.__build_agp(bgp)
+            gen_dict = self.__collector.get_fragment_generator(agp)
+            self.__plan = gen_dict.get('plan', None)
+            return self.__plan, self._produce(gen_dict['generator'], bgp)
+
+    def _produce(self, gen, bgp):
         for context, s, p, o in gen:
             log.debug('Got triple: {} {} {} .'.format(s.encode('utf8', 'replace'), p.encode('utf8', 'replace'),
                                                       o.encode('utf8', 'replace')))
-            self.add((s, p, o))
-            subject = context[0] if tps is None else tps[str(context)][0]
-            if subject in self.__roots:
-                self.add((s, RDF.type, AGORA.Root))
             yield context, s, p, o
+
+        self.__collected.append(bgp)
+
+    @property
+    def collected(self):
+        return iter(self.__collected)
+
+    @property
+    def collector(self):
+        return self.__collector
 
     def load(self, *tps):
         for x in self.gen(*tps):
@@ -100,9 +138,6 @@ class AgoraGraph(Graph):
     def query(self, query_object, **kwargs):
         result = super(AgoraGraph, self).query(query_object, processor='agora',
                                                result='agora', **kwargs)
-        for root in result.roots:
-            root_str = '?{}'.format(root) if not isinstance(root, URIRef) else str(root)
-            self.__roots.add(root_str)
         return result
 
     def search_plan(self, query_object, **kwargs):
@@ -111,8 +146,6 @@ class AgoraGraph(Graph):
 
         return result.plan
 
-    def agp(self, query_object, **kwargs):
-        result = super(AgoraGraph, self).query(query_object, processor='agora',
-                                               result='agora', **kwargs)
-
-        return result.agp
+    def agps(self, query_object):
+        for bgp in extract_bgps(query_object, prefixes=self.__collector.prefixes):
+            yield self.__build_agp(bgp.triples)

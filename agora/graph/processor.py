@@ -32,7 +32,7 @@ from rdflib import RDF
 from rdflib import URIRef
 from rdflib import Variable
 from rdflib.plugins.sparql.algebra import translateQuery
-from rdflib.plugins.sparql.evaluate import evalQuery
+from agora.graph.evaluate import evalQuery
 from rdflib.plugins.sparql.parser import parseQuery
 from rdflib.plugins.sparql.processor import SPARQLResult, SPARQLProcessor
 from rdflib.plugins.sparql.sparql import Query
@@ -43,13 +43,13 @@ __author__ = 'Fernando Serena'
 log = logging.getLogger('agora.graph.processor')
 
 
-def tp_part(graph, term):
+def tp_part(term):
     if isinstance(term, Variable) or isinstance(term, BNode):
         return '?{}'.format(str(term))
     elif isinstance(term, URIRef):
         return '<{}>'.format(term)
     elif isinstance(term, Literal):
-        return term.n3(namespace_manager=graph.namespace_manager)
+        return term.n3()
 
 
 def chunks(l, n=None):
@@ -85,11 +85,11 @@ def chunks(l, n=None):
 class FragmentResult(SPARQLResult):
     def __init__(self, res):
         super(FragmentResult, self).__init__(res)
-        self.gen = res['gen_']
-        self.restore = res['restore_']
-        self.roots = res['roots_']
-        self.plan = res['plan_']
-        self.agp = res['agp_']
+        # self.gen = res['gen_']
+        # self.restore = res['restore_']
+        # self.roots = res['roots_']
+        # self.plan = res['plan_']
+        # self.agp = res['agp_']
         self.chunk_size = res.get('chunk_', None)
         self.__collecting = None
         self.__ready = False
@@ -115,40 +115,27 @@ class FragmentResult(SPARQLResult):
         elif self.type == 'SELECT':
             # this iterates over ResultRows of variable bindings
 
-            try:
-                if self._genbindings:
-                    th = Thread(target=self.__collect)
-                    th.daemon = True
-                    self.__collecting = True
-                    th.start()
-                    while True:
-                        self.__event.wait()
-                        with self.__lock:
-                            self._genbindings = self.restore().get("bindings")
-                            self.__event.clear()
-                        for b in self._genbindings:
-                            if not b:
-                                break
-                            if b not in self._bindings:
-                                self._bindings.append(b)
-                                yield ResultRow(b, self.vars)
-                        with self.__lock:
-                            if not self.__collecting:
-                                break
-                    th.join()
-                    self._genbindings = None
-                else:
-                    for b in self._bindings:
-                        yield ResultRow(b, self.vars)
-            except Exception, e:
-                log.error(e.message)
+            if self._genbindings:
+                for b in self._genbindings:
+                    self._bindings.append(b)
+                    yield ResultRow(b, self.vars)
+                self._genbindings = None
+            else:
+                for b in self._bindings:
+                    yield ResultRow(b, self.vars)
 
 
-def extract_bgps(part):
+def extract_bgps(query, prefixes):
+    parsetree = parseQuery(query)
+    query = translateQuery(parsetree, initNs=prefixes)
+    part = query.algebra
     while part:
         if part.name == 'BGP':
             yield part
         elif part.name == 'LeftJoin':
+            yield part.p1
+            yield part.p2
+        elif part.name == 'Minus':
             yield part.p1
             yield part.p2
         part = part.p
@@ -179,42 +166,5 @@ class FragmentProcessor(SPARQLProcessor):
         log.debug(
             'Took {}ms to parse the SPARQL query: {}'.format((datetime.now() - start).total_seconds(), str(strOrQuery)))
 
-        roots = set([])
-        plan = None
-        bgp = []
-        bgp_graph = nx.DiGraph()
-        if fragment_gen is None:
-            part = query.algebra
-            bgp_parts = extract_bgps(query.algebra)
-            bgp = set([])
-
-            for part in bgp_parts:
-                for s, p, o in part.triples:
-                    s_elm = tp_part(self.graph, s)
-                    if p == RDF.type:
-                        o_elm = self.graph.qname(o)
-                        p_elm = 'a'
-                    else:
-                        p_elm = self.graph.qname(p)
-                        o_elm = tp_part(self.graph, o)
-
-                    bgp.add('{} {} {}'.format(s_elm, p_elm, o_elm))
-                    bgp_graph.add_edge(s, o, predicate=p)
-
-            start = datetime.now()
-            plan, fragment_gen = self.graph.gen(*bgp)
-            log.debug('Took {}s to build a plan for {}'.format((datetime.now() - start).total_seconds(), str(bgp)))
-
-            roots = filter(lambda x: bgp_graph.in_degree(x) == 0, bgp_graph.nodes())
-            for root in roots:
-                part.triples = [(root, RDF.type, AGORA.Root)] + part.triples
-
         eval = evalQuery(self.graph, query, initBindings, base)
-        eval['gen_'] = fragment_gen
-        eval['restore_'] = self.restore(query, initBindings, base)
-        if chunk_size is not None:
-            eval['chunk_'] = chunk_size
-        eval['roots_'] = roots
-        eval['plan_'] = plan
-        eval['agp_'] = bgp
         return eval

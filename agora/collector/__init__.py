@@ -22,6 +22,7 @@ import re
 from abc import abstractmethod
 
 from agora.collector.execution import PlanExecutor
+from agora.engine.plan.agp import AGP
 from rdflib import BNode
 from rdflib import Literal
 from rdflib import URIRef
@@ -36,24 +37,8 @@ class AbstractCollector(object):
         raise NotImplementedError
 
     @abstractmethod
-    def get_fragment(self, *tps, **kwargs):
-        # type: (list, dict) -> iter
-        """
-        Return a complete fragment for a given gp.
-        :param gp: A graph pattern
-        :return:
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def get_fragment_generator(self, *tps, **kwargs):
-        # type: (list, dict) -> iter
-        """
-        Return a fragment generator for a given gp.
-        :param gp:
-        :param kwargs:
-        :return:
-        """
+    def get_fragment_generator(self, agp, **kwargs):
+        # type: (AGP, dict) -> iter
         raise NotImplementedError
 
 
@@ -76,25 +61,10 @@ class Collector(AbstractCollector):
     def planner(self):
         return self.__planner
 
-    def get_fragment(self, *tps, **kwargs):
-        """
-        Return a complete fragment for a given gp.
-        :param gp: A graph pattern
-        :return:
-        """
-        plan = self.__planner.make_plan(*tps)
-        executor = PlanExecutor(plan)
-        return executor.get_fragment(cache=self.cache, loader=self.__loader, **kwargs)
+    def get_fragment_generator(self, agp, **kwargs):
+        # type: (AGP) -> dict
 
-    def get_fragment_generator(self, *tps, **kwargs):
-        """
-        Return a fragment generator for a given gp.
-        :param gp:
-        :param kwargs:
-        :return:
-        """
-
-        plan = self.__planner.make_plan(*tps)
+        plan = self.__planner.make_plan(agp)
         executor = PlanExecutor(plan)
 
         def with_context():

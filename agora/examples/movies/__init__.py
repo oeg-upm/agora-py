@@ -34,7 +34,7 @@ def load_films_from_dbpedia():
 
     sparql.setQuery("""
            SELECT distinct ?film
-           WHERE {?film a dbpedia-owl:Film} LIMIT 10
+           WHERE {?film a dbpedia-owl:Film} LIMIT 20 OFFSET 0
        """)
     results = sparql.query().convert()
 

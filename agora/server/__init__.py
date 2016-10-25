@@ -22,6 +22,7 @@ import json
 import logging
 import urlparse
 from functools import wraps
+from urllib import urlencode
 
 import requests
 from flask import Flask, jsonify, request, url_for
@@ -183,7 +184,9 @@ class Client(object):
     def _get_request(self, path, accept='application/json'):
         try:
             stream = accept == 'application/agora-quad'
-            response = requests.get(urlparse.urljoin(self.host, path), headers={'Accept': accept}, stream=stream)
+            response = requests.get(urlparse.urljoin(self.host, path, allow_fragments=True).replace('#', '%23'),
+                                    headers={'Accept': accept},
+                                    stream=stream)
             if response.status_code != 200:
                 raise IOError(response.content)
             if stream:

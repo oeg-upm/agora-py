@@ -1,27 +1,14 @@
 import logging
 
-from SPARQLWrapper import JSON
-from SPARQLWrapper import SPARQLWrapper
-from agora.examples.movies import load_films_from_dbpedia
-from datetime import datetime
-
-import requests
 from agora import Agora, setup_logging
-from agora.collector.scholar import Scholar
 from agora.collector.cache import RedisCache
-from agora.collector.wrapper import ResourceWrapper
+from agora.collector.scholar import Scholar
 from agora.engine.fountain.onto import DuplicateVocabulary
-from dateutil.parser import parse
-from rdflib import Graph
-from rdflib import Literal
-from rdflib import Namespace
-from rdflib import RDF
-from rdflib import URIRef
-from rdflib import XSD
-from agora.server.sparql import build as bs
+from agora.examples.movies import load_films_from_dbpedia
+from agora.server.fountain import build as bn
 from agora.server.fragment import build as bf
 from agora.server.planner import build as bp
-from agora.server.fountain import build as bn
+from agora.server.sparql import build as bs
 
 __author__ = 'Fernando Serena'
 
@@ -36,16 +23,12 @@ def query(query, **kwargs):
     return agora.query(query, collector=scholar, **kwargs)
 
 
-def fragment(query, **kwargs):
-    return agora.fragment(query, collector=scholar, **kwargs)
-
-
-def agp_fragment(*tps, **kwargs):
-    return agora.agp_fragment(collector=scholar, *tps, **kwargs)
+def fragment(**kwargs):
+    return agora.fragment_generator(collector=scholar, **kwargs)
 
 
 server = bs(agora, query_function=query, import_name=__name__)
-bf(agora, server=server, fragment_function=fragment, agp_fragment_function=agp_fragment)
+bf(agora, server=server, fragment_function=fragment)
 bp(agora.planner, server=server)
 bn(agora.fountain, server=server)
 

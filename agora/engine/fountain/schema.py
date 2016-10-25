@@ -20,11 +20,10 @@
 """
 import logging
 
+from agora.engine.utils.cache import Cache, ContextGraph, cached
 from agora.engine.utils.graph import get_cached_triple_store
 from rdflib import URIRef, BNode, Graph
 from rdflib.namespace import RDFS, NamespaceManager
-
-from agora.engine.utils.cache import Cache, ContextGraph, cached
 
 __author__ = 'Fernando Serena'
 

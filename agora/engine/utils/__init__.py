@@ -20,17 +20,3 @@
 """
 
 __author__ = 'Fernando Serena'
-
-
-def tp_parts(tp):
-    """
-    :param tp: A triple pattern string
-    :return: A string-based 3-tuple like (subject, predicate, object)
-    """
-    if tp.endswith('"'):
-        parts = [tp[tp.find('"'):]]
-        st = tp.replace(parts[0], '').rstrip()
-        parts = st.split(" ") + parts
-    else:
-        parts = tp.split(' ')
-    return tuple(parts)

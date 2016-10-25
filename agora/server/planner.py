@@ -23,6 +23,7 @@ import logging
 import re
 from StringIO import StringIO
 
+from agora.engine.plan import AGP
 from agora.engine.plan import AbstractPlanner
 from agora.server import Server, TURTLE, HTML, Client, APIError
 from agora.server.fountain import client as fc
@@ -42,11 +43,12 @@ def build(planner, server=None, import_name=__name__):
     @server.get('/plan', produce_types=(TURTLE, HTML))
     def make_plan():
         try:
-            gp_str = server.request_args.get('gp', '{}')
-            gp_str = gp_str.lstrip('{').rstrip('}').strip()
-            tps = re.split('\. ', gp_str)
-            tps = map(lambda x: x.strip(), filter(lambda y: y != '', tps))
-            plan = planner.make_plan(*tps)
+            agp_str = server.request_args.get('agp', '{}')
+            agp_str = agp_str.lstrip('{').rstrip('}').strip()
+            tps = re.split('\. ', agp_str)
+            tps = map(lambda x: x.rstrip('.').strip(), filter(lambda y: y != '', tps))
+            agp = AGP(tps, prefixes=planner.fountain.prefixes)
+            plan = planner.make_plan(agp)
             return plan.serialize(format='turtle')
         except NameError, e:
             raise APIError(e.message)
@@ -60,9 +62,8 @@ class PlannerClient(Client, AbstractPlanner):
         super(PlannerClient, self).__init__(host, port)
         self.__fountain = fc(host, port) if fountain is None else fountain
 
-    def make_plan(self, *tps):
-        agp = '{ %s }' % ' . '.join(tps)
-        response = self._get_request('plan?gp=%s' % agp, accept='text/turtle')
+    def make_plan(self, agp):
+        response = self._get_request('plan?agp=%s' % agp, accept='text/turtle')
         graph = Graph()
         graph.parse(StringIO(response), format='text/turtle')
         return graph

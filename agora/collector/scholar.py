@@ -23,29 +23,26 @@ import logging
 import traceback
 from Queue import Empty, Full
 from StringIO import StringIO
+from datetime import datetime
 from multiprocessing import Queue
 from threading import Thread, Event, Lock
 
-import networkx as nx
-import re
 from agora.collector import Collector, triplify
 from agora.collector.cache import RedisCache
 from agora.engine.plan import AbstractPlanner
+from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
-from agora.engine.utils import tp_parts
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
-from agora.graph import extract_tp_from_plan
+from agora.graph import extract_tps_from_plan
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
-from datetime import datetime
-from networkx.algorithms.isomorphism import DiGraphMatcher
-from rdflib import BNode
 from rdflib import ConjunctiveGraph, Graph
 from rdflib import Literal
 from rdflib import RDF
 from rdflib import RDFS
 from rdflib import URIRef
+from rdflib import Variable
 from shortuuid import uuid
 
 __author__ = 'Fernando Serena'
@@ -55,76 +52,8 @@ log = logging.getLogger('agora.collector.scholar')
 tpool = ThreadPoolExecutor(max_workers=4)
 
 
-class GraphPattern(set):
-    """
-    An extension of the set class that represents a graph pattern, which is a set of triple patterns
-    """
-
-    def __init__(self, s=()):
-        super(GraphPattern, self).__init__(s)
-
-    @property
-    def wire(self):
-        # type: () -> nx.DiGraph
-        """
-        Creates a graph from the graph pattern
-        :return: The graph (networkx)
-        """
-        g = nx.DiGraph()
-        for tp in self:
-            (s, p, o) = tuple(tp_parts(tp.strip()))
-            edge_data = {'link': p}
-            g.add_node(s)
-            if o.startswith('?'):
-                g.add_node(o)
-            else:
-                g.add_node(o, literal=o)
-                edge_data['to'] = o
-            g.add_edge(s, o, **edge_data)
-
-        return g
-
-    def __eq__(self, other):
-        # type: (GraphPattern) ->  bool
-        """
-        Two graph patterns are equal if they are isomorphic**
-        """
-        if not isinstance(other, GraphPattern):
-            return super(GraphPattern, self).__eq__(other)
-
-        mapping = self.mapping(other)
-        return mapping is not None
-
-    def __repr__(self):
-        return str(list(self))
-
-    def mapping(self, other):
-        # type: (GraphPattern) -> iter
-        """
-        :return: If there is any, the mapping with another graph pattern
-        """
-        if not isinstance(other, GraphPattern):
-            return ()
-
-        my_wire = self.wire
-        others_wire = other.wire
-
-        def __node_match(n1, n2):
-            return n1 == n2
-
-        def __edge_match(e1, e2):
-            return e1 == e2
-
-        matcher = DiGraphMatcher(my_wire, others_wire, node_match=__node_match, edge_match=__edge_match)
-        mapping = list(matcher.isomorphisms_iter())
-        if len(mapping) == 1:
-            return mapping.pop()
-        else:
-            return ()
-
-
-def _remove_tp_filters(tp, filter_mapping={}):
-    # type: (str) -> (str, dict)
+def _remove_tp_filters(tp, filter_mapping={}, prefixes=None):
+    # type: (TP, dict, dict) -> (str, dict)
     """
     Transforms a triple pattern that may contain filters to a new one with both subject and object bounded
     to variables
@@ -132,26 +61,30 @@ def _remove_tp_filters(tp, filter_mapping={}):
     :return: Filtered triple pattern + filter mapping
     """
 
-    def __create_var(elm, predicate):
+    def __create_var(elm):
         if elm in filter_mapping.values():
             elm = list(filter(lambda x: filter_mapping[x] == elm, filter_mapping)).pop()
-        elif predicate(elm):
-            v = '?{}'.format(uuid())
+        else:
+            v = Variable('v' + uuid())
             filter_mapping[v] = elm
             elm = v
         return elm
 
-    s, p, o = tp_parts(tp)
-    s = __create_var(s, lambda x: '<' in x and '>' in x)
-    o = __create_var(o, lambda x: '"' in x or ('<' in x and '>' in x))
-    return '{} {} {}'.format(s, p, o)
+    # g = Graph()
+    s, p, o = tp
+    # s, p, o = TP.from_string(tp, prefixes=prefixes, graph=g)
+    if isinstance(s, URIRef):
+        s = __create_var(s)
+    if not isinstance(o, Variable):
+        o = __create_var(o)
+    return TP(s, p, o)
 
 
-def _generalize_agp(agp):
+def _generalize_agp(agp, prefixes=None):
     # Create a filtered graph pattern from the request one (general_gp)
-    general_gp = GraphPattern()
+    general_gp = AGP(prefixes=prefixes)
     filter_mapping = {}
-    for new_tp in map(lambda x: _remove_tp_filters(x, filter_mapping), agp):
+    for new_tp in map(lambda x: _remove_tp_filters(x, filter_mapping, prefixes=prefixes), agp):
         general_gp.add(new_tp)
     return general_gp, filter_mapping
 
@@ -191,7 +124,7 @@ class FragmentStream(object):
 
 class Fragment(object):
     def __init__(self, agp, kv, triples, fragments_key, fid):
-        # type: (GraphPattern, redis.StrictRedis, ConjunctiveGraph, str, str) -> Fragment
+        # type: (AGP, redis.StrictRedis, ConjunctiveGraph, str, str) -> Fragment
         self.__lock = Lock()
         self.key = '{}:{}'.format(fragments_key, fid)
         self.__agp = agp
@@ -228,6 +161,7 @@ class Fragment(object):
 
     def updated_for(self, ttl):
         ttl = int(min(100000, ttl))  # sys.maxint don't work for expire values!
+        ttl = int(max(ttl, 1))
         self.__updated = ttl > 0
         updated_key = '{}:updated'.format(self.key)
         with self.kv.pipeline() as pipe:
@@ -259,9 +193,9 @@ class Fragment(object):
             self.kv.delete(collecting_key)
 
     @classmethod
-    def load(cls, kv, triples, fragments_key, fid):
+    def load(cls, kv, triples, fragments_key, fid, prefixes=None):
         # type: (redis.StrictRedis, ConjunctiveGraph, str, str) -> Fragment
-        agp = GraphPattern(kv.smembers('{}:{}:gp'.format(fragments_key, fid)))
+        agp = AGP(kv.smembers('{}:{}:gp'.format(fragments_key, fid)), prefixes=prefixes)
         plan_turtle = kv.get('{}:{}:plan'.format(fragments_key, fid))
         fragment = Fragment(agp, kv, triples, fragments_key, fid)
         fragment.plan = Graph().parse(StringIO(plan_turtle), format='turtle')
@@ -320,7 +254,7 @@ class Fragment(object):
         with self.kv.pipeline() as pipe:
             pipe.set('{}:plan'.format(self.key), p.serialize(format='turtle'))
             pipe.execute()
-        self.__tp_map = extract_tp_from_plan(self.__plan)
+        self.__tp_map = extract_tps_from_plan(self.__plan)
         self.__plan_event.set()
 
     def __notify(self, quad):
@@ -330,10 +264,11 @@ class Fragment(object):
     def populate(self, collector):
         self.collecting = True
         self.stream.clear()
-        collect_dict = collector.get_fragment_generator(*self.agp)
+        collect_dict = collector.get_fragment_generator(self.agp)
         self.plan = collect_dict['plan']
         back_id = uuid()
         n_triples = 0
+        pre_time = datetime.utcnow()
         for c, s, p, o in collect_dict['generator']:
             tp = self.__tp_map[str(c)]
             self.stream.put(str(c), (s, p, o))
@@ -345,8 +280,11 @@ class Fragment(object):
                 self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
                 self.triples.get_context(str((self.fid, tp))).__iadd__(self.triples.get_context(str((back_id, tp))))
                 self.triples.remove_context(self.triples.get_context(str((back_id, tp))))
-            self.updated_for(collect_dict.get('ttl')())
+            actual_ttl = collect_dict.get('ttl')()
+            fragment_ttl = max(actual_ttl, (datetime.utcnow() - pre_time).total_seconds())
+            self.updated_for(fragment_ttl)
             self.collecting = False
+
         log.info('Finished fragment collection: {} ({} triples)'.format(self.fid, n_triples))
 
     def remove(self):
@@ -368,12 +306,13 @@ class Fragment(object):
 
 
 class FragmentIndex(object):
-    def __init__(self, key_prefix='', kv=None, triples=None):
-        # type: (str, redis.StrictRedis) -> FragmentIndex
+    def __init__(self, planner, key_prefix='', kv=None, triples=None):
+        # type: (AbstractPlanner, str, redis.StrictRedis) -> FragmentIndex
         self.__key_prefix = key_prefix
         self.__fragments_key = '{}:fragments'.format(key_prefix)
         self.kv = kv if kv is not None else get_kv()
         self.triples = triples if triples is not None else get_triple_store()
+        self.__planner = planner
         # Load fragments from kv
         self.__fragments = dict(self.__load_fragments())
         self.__lock = Lock()
@@ -381,24 +320,25 @@ class FragmentIndex(object):
     def __load_fragments(self):
         fids = self.kv.smembers(self.__fragments_key)
         for fragment_id in fids:
-            fragment = Fragment.load(self.kv, self.triples, self.__fragments_key, fragment_id)
+            fragment = Fragment.load(self.kv, self.triples, self.__fragments_key, fragment_id,
+                                     prefixes=self.__planner.fountain.prefixes)
             yield (fragment_id, fragment)
 
     def get(self, agp, general=False):
-        # type: (GraphPattern, bool) -> dict
+        # type: (AGP, bool) -> dict
         with self.__lock:
             agp_keys = self.kv.keys('{}:*:gp'.format(self.__fragments_key))
             for agp_key in agp_keys:
-                stored_agp = GraphPattern(self.kv.smembers(agp_key))
+                stored_agp = AGP(self.kv.smembers(agp_key), prefixes=self.__planner.fountain.prefixes)
                 mapping = stored_agp.mapping(agp)
                 filter_mapping = {}
                 if not mapping and general:
-                    general, filter_mapping = _generalize_agp(agp)
+                    general, filter_mapping = _generalize_agp(agp, prefixes=self.__planner.fountain.prefixes)
                     mapping = stored_agp.mapping(general)
                 if mapping:
                     fragment_id = agp_key.split(':')[-2]
                     return {'fragment': self.__fragments[fragment_id],
-                            'variables': mapping, 'literals': filter_mapping}
+                            'terms': mapping, 'literals': filter_mapping}
 
         return None
 
@@ -406,8 +346,8 @@ class FragmentIndex(object):
     def fragments(self):
         return self.__fragments
 
-    def register(self, agp, **kwargs):
-        # type: (GraphPattern) -> Fragment
+    def register(self, agp):
+        # type: (AGP, dict) -> Fragment
         with self.__lock:
             fragment_id = str(uuid())
             fragment = Fragment(agp, self.kv, self.triples, self.__fragments_key, fragment_id)
@@ -444,7 +384,7 @@ class Scholar(Collector):
             persist_mode = cache.persist_mode
         if persist_mode:
             triples = get_triple_store(persist_mode=persist_mode, base=cache.base_path, path='fragments')
-        self.__index = FragmentIndex(key_prefix='scholar', kv=kv, triples=triples)
+        self.__index = FragmentIndex(planner, key_prefix='scholar', kv=kv, triples=triples)
         self.__daemon_event = Event()
         self.__daemon_event.clear()
         self.__enabled = True
@@ -457,7 +397,6 @@ class Scholar(Collector):
         futures = {}
         while self.__enabled:
             for fragment in self.__index.fragments.values():
-                # fragment.lock.acquire()
                 if not fragment.updated and not fragment.collecting:
                     collector = Collector(self.planner, self.cache)
                     collector.loader = self.loader
@@ -465,8 +404,8 @@ class Scholar(Collector):
                     try:
                         futures[fragment.fid] = tpool.submit(fragment.populate, collector)
                     except RuntimeError as e:
+                        traceback.print_exc()
                         log.warn(e.message)
-                    # fragment.lock.release()
 
             if futures:
                 log.info('Waiting for: {} collections'.format(len(futures)))
@@ -486,12 +425,12 @@ class Scholar(Collector):
 
     @staticmethod
     def __map(mapping, elm):
-        map_vars = mapping.get('variables', None)
+        map_terms = mapping.get('terms', None)
         map_literals = mapping.get('literals', None)
-        result = str(elm)
-        if map_vars is not None:
-            result = map_vars.get(result, result)
-        if map_literals is not None:
+        result = elm
+        if map_terms:
+            result = map_terms.get(result, result)
+        if map_literals:
             result = map_literals.get(result, result)
 
         return result
@@ -505,18 +444,19 @@ class Scholar(Collector):
         v_nodes = list(mapped_plan.subjects(RDF.type, AGORA.Variable))
         for v_node in v_nodes:
             v_source_label = list(mapped_plan.objects(v_node, RDFS.label)).pop()
-            new_value = Literal(self.__map(mapping, v_source_label))
-            if not new_value.startswith('?'):
+            mapped_term = self.__map(mapping, Variable(v_source_label))
+            if isinstance(mapped_term, Literal):
                 mapped_plan.set((v_node, RDF.type, AGORA.Literal))
-                mapped_plan.set((v_node, AGORA.value, new_value))
+                mapped_plan.set((v_node, AGORA.value, Literal(mapped_term.n3())))
                 mapped_plan.remove((v_node, RDFS.label, None))
+            elif isinstance(mapped_term, URIRef):
+                mapped_plan.remove((v_node, None, None))
+                for s, p, _ in mapped_plan.triples((None, None, v_node)):
+                    mapped_plan.remove((s, p, v_node))
+                    mapped_plan.add((s, p, mapped_term))
             else:
-                mapped_plan.set((v_node, RDFS.label, new_value))
+                mapped_plan.set((v_node, RDFS.label, Literal(mapped_term.n3())))
 
-        l_nodes = list(mapped_plan.subjects(RDF.type, AGORA.Literal))
-        for l_node in l_nodes:
-            l_source_label = list(mapped_plan.objects(l_node, AGORA.value)).pop()
-            mapped_plan.set((l_node, AGORA.value, Literal(self.__map(mapping, l_source_label))))
         return mapped_plan
 
     def mapped_gen(self, mapping):
@@ -524,13 +464,11 @@ class Scholar(Collector):
         for c, s, p, o in generator:
             yield c, s, p, o
 
-    def get_fragment_generator(self, *tps, **kwargs):
-        agp = GraphPattern(tps)
-
+    def get_fragment_generator(self, agp, **kwargs):
         mapping = self.__index.get(agp, general=True)
         if not mapping:
             # Register fragment
-            fragment = self.__index.register(agp, **kwargs)
+            fragment = self.__index.register(agp)
             mapping = {'fragment': fragment}
 
         self.__daemon_event.set()

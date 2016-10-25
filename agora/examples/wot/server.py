@@ -10,32 +10,26 @@ from agora.server.sparql import build as bs
 
 setup_logging(logging.DEBUG)
 
-cache = RedisCache(min_cache_time=10, persist_mode=True, path='cache', redis_file='store/cache/cache.db')
+cache = RedisCache(min_cache_time=20, persist_mode=True, path='cache', redis_file='store/cache/cache.db')
 
 # Agora object
 agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
 
 
 def query(query, **kwargs):
-    # return agora.query(query, **kwargs)
-    # return agora.query(query, cache=cache, **kwargs)
+    # return agora.query(query)
+    # return agora.query(query, cache=cache)
     return agora.query(query, collector=scholar, **kwargs)
 
 
-def fragment(query, **kwargs):
-    # return agora.fragment(query, **kwargs)
-    # return agora.fragment(query, cache=cache, **kwargs)
-    return agora.fragment(query, collector=scholar, **kwargs)
-
-
-def agp_fragment(*tps, **kwargs):
-    # return agora.agp_fragment(*tps, **kwargs)
-    # return agora.agp_fragment(cache=cache, *tps, **kwargs)
-    return agora.agp_fragment(collector=scholar, *tps, **kwargs)
+def fragment(**kwargs):
+    # return agora.fragment_generator(**kwargs)
+    # return agora.fragment_generator(cache=cache, **kwargs)
+    return agora.fragment_generator(collector=scholar, **kwargs)
 
 
 server = bs(agora, query_function=query, import_name=__name__)
-bf(agora, server=server, fragment_function=fragment, agp_fragment_function=agp_fragment)
+bf(agora, server=server, fragment_function=fragment)
 bp(agora.planner, server=server)
 bn(agora.fountain, server=server)
 

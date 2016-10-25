@@ -53,29 +53,54 @@ for film in load_films_from_dbpedia():
     except Exception:
         pass
 
-# Example queries
-queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor
-                              OPTIONAL { ?actor dbp:birthName ?name }
-                              }"""]
+scholar = Scholar(agora.planner, cache=cache)
 
-# queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor ;
-#                                  dbp:birthName ?name .
-#                               }"""]
+# Example queries
+# queries = ["""SELECT DISTINCT ?name WHERE { ?film a dbpedia-owl:Film .
+#                                                    ?film foaf:name ?name .
+#                                                    ?film dbpedia-owl:starring ?actor .
+#                                                    OPTIONAL {?actor dbp:birthName "Mary Cathleen Collins"@en }
+#                                                  }"""]
+
+#
+# queries = ["""SELECT DISTINCT ?film WHERE { { ?film a dbpedia-owl:Film }
+#                                             MINUS
+#                                             { ?film foaf:name ?name }
+#                                            }"""]
+
+# queries = ["""SELECT * WHERE { ?film foaf:name ?name .
+#                                ?film dbpedia-owl:starring ?actor
+#                              }"""]
+
+# queries = ["""SELECT * WHERE { ?actor dbp:birthName "Mary Cathleen Collins"@en }"""]
+
+# queries = ["""SELECT * WHERE {?film a dbpedia-owl:Film . ?film foaf:name ?name }"""]
+
+queries = ["""SELECT ?name WHERE { ?actor dbp:birthName ?name }"""]
 
 elapsed = []
 
-scholar = Scholar(agora.planner, cache=cache)
+# for t in agora.fragment_generator(queries[0], collector=scholar):
+#     print t
+#
+# for row in agora.fragment(queries[0], collector=scholar).query(queries[0]):
+#     print row.asdict()
 
-for query in queries:
-    pre = datetime.now()
-    # Ask agora for results of the given query,
-    # evaluating candidate results for each fragment triple collected (chunk_size=1)
-    # -> Removing chunk_size argument forces to wait until all relevant triples are collected
-    for row in agora.query(query, collector=scholar):
-        print row.asdict()
-    post = datetime.now()
-    elapsed.append((post - pre).total_seconds())
 
-print elapsed
+for row in agora.query(queries[0], collector=scholar):
+    print row.asdict()
+
+
+# for query in queries:
+#     pre = datetime.now()
+# Ask agora for results of the given query,
+# evaluating candidate results for each fragment triple collected (chunk_size=1)
+# -> Removing chunk_size argument forces to wait until all relevant triples are collected
+# for row in agora.query(query, cache=cache):
+#     print row.asdict()
+# post = datetime.now()
+# elapsed.append((post - pre).total_seconds())
+#
+# print elapsed
 
 scholar.shutdown(wait=False)

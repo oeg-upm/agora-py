@@ -21,24 +21,28 @@
 
 import Queue
 import StringIO
+import gc
 import logging
+import math
 import multiprocessing
+import sys
 import traceback
-from threading import RLock, Thread, Event
+from _bsddb import DBNotFoundError
+from datetime import datetime as dt, datetime
+from threading import RLock, Thread, Event, Lock
 from xml.sax import SAXParseException
 
-import gc
+import networkx as nx
 import requests
-import sys
-from _bsddb import DBNotFoundError
 from agora.engine.plan.graph import AGORA
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
-from datetime import datetime as dt, datetime
 from rdflib import ConjunctiveGraph, RDF, URIRef
 from rdflib import Graph
+from rdflib import Literal
+from rdflib import RDFS
+from rdflib import Variable
 from requests.utils import parse_dict_header
-import networkx as nx
 
 pool = ThreadPoolExecutor(max_workers=8)
 
@@ -83,7 +87,9 @@ def get_resource_ttl(headers):
     ttl = None
     if cache_control is not None:
         cache_dict = parse_dict_header(cache_control)
-        ttl = int(cache_dict.get('max-age', ttl))
+        ttl = cache_dict.get('max-age', ttl)
+        if ttl is not None:
+            ttl = math.ceil(float(ttl))
     return ttl
 
 
@@ -127,102 +133,239 @@ def get_content(uri, format):
         return True
 
 
+class FilterTree(set):
+    def __init__(self):
+        super(FilterTree, self).__init__()
+        self.variables = set([])
+        self.__lock = Lock()
+
+    def add_variable(self, v):
+        self.variables.add(v)
+
+    def filter(self, resource, space, variable):
+        with self.__lock:
+            # if variable in self.variables:
+            self.add((resource, space, variable))
+
+    def is_filtered(self, resource, space, variable):
+        with self.__lock:
+            # if variable in self.variables:
+            return (resource, space, variable) in self
+            # return False
+
+
+class PlanGraph(nx.DiGraph):
+    def __init__(self, plan, ss):
+        # type: (Graph, SSWrapper) -> PlanGraph
+        super(PlanGraph, self).__init__()
+        self.__data = {}
+
+        node_patterns = {}
+        for (node, _, tp) in plan.triples((None, AGORA.byPattern, None)):
+            if node not in node_patterns:
+                node_patterns[node] = []
+            node_patterns[node].append(tp)
+        for node in node_patterns:
+            spaces = set([])
+            patterns = set([])
+            for tp in node_patterns[node]:
+                tp_wrapper = ss.patterns[tp]
+                spaces.add(tp_wrapper.defined_by)
+                patterns.add(tp_wrapper)
+            self.add_node(node, spaces=spaces, byPattern=patterns)
+            self.__build_from(plan, node, spaces=spaces)
+
+    def __build_from(self, plan, node, **kwargs):
+        pred_nodes = list(plan.subjects(AGORA.next, node))
+        seeds = set([]) if pred_nodes else plan.objects(node, AGORA.hasSeed)
+        self.add_node(node, seeds=seeds, **kwargs)
+        for pred in pred_nodes:
+            links = list(plan.objects(subject=node, predicate=AGORA.onProperty))
+            expected_types = list(plan.objects(subject=node, predicate=AGORA.expectedType))
+            link = links.pop() if links else None
+            self.add_edge(pred, node, onProperty=link, expectedType=expected_types)
+            self.__build_from(plan, pred, **kwargs)
+
+    def add_node(self, n, attr_dict=None, **attr):
+        if n not in self.__data:
+            self.__data[n] = dict()
+        self.__data[n].update(attr)
+        for at in attr:
+            if isinstance(attr[at], dict):
+                self.__data[n][at].update(attr[at])
+        super(PlanGraph, self).add_node(n, attr_dict=attr_dict, **self.__data[n])
+
+    def get_node_data(self, node):
+        return self.__data[node]
+
+
+class TPWrapper(object):
+    def __init__(self, plan, node):
+        # type: (Graph, object) -> TPWrapper
+        self.__defined_by = list(plan.subjects(AGORA.definedBy, node)).pop()
+        self.__node = node
+
+        predicate = list(plan.objects(node, predicate=AGORA.predicate)).pop()
+        self.object_node = list(plan.objects(node, predicate=AGORA.object)).pop()
+        self.subject_node = list(plan.objects(node, predicate=AGORA.subject)).pop()
+        if isinstance(self.object_node, URIRef):
+            object = self.object_node
+        elif (self.object_node, RDF.type, AGORA.Literal) in plan:
+            object = list(plan.objects(self.object_node, AGORA.value)).pop()
+        else:  # It is a variable
+            object = Variable(list(plan.objects(self.object_node, RDFS.label)).pop().toPython())
+
+        if isinstance(self.subject_node, URIRef):
+            subject = self.subject_node
+        else:  # It is a variable
+            subject = Variable(list(plan.objects(self.subject_node, RDFS.label)).pop().toPython())
+
+        try:
+            self.__check = list(plan.objects(node, predicate=AGORA.checkType)).pop().toPython()
+        except IndexError:
+            self.__check = True
+
+        self.s = subject
+        self.p = predicate
+        self.o = object
+
+    @property
+    def defined_by(self):
+        return self.__defined_by
+
+    @property
+    def node(self):
+        return self.__node
+
+    @property
+    def check(self):
+        return self.__check
+
+
+class SSWrapper(object):
+    def __init__(self, plan):
+        # type: (Graph) -> SSWrapper
+        self.__plan = plan
+        self.__spaces = {}
+        self.__nodes = {}
+        self.__pattern_space = {}
+        self.__filter_trees = {}
+        for space in self.__plan.subjects(RDF.type, AGORA.SearchSpace):
+            self.__spaces[space] = set([])
+            self.__filter_trees[space] = []
+        tp_nodes = list(self.__plan.subjects(RDF.type, AGORA.TriplePattern))
+        self.__patterns = {}
+        filter_roots = set([])
+        for tp in tp_nodes:
+            tp_wrapper = TPWrapper(plan, tp)
+            self.__patterns[tp] = tp_wrapper
+            self.__nodes[tp_wrapper] = tp
+            space = tp_wrapper.defined_by
+            self.__spaces[space].add(tp)
+            self.__pattern_space[tp_wrapper] = space
+
+            if not isinstance(tp_wrapper.o, Variable):
+                filter_roots.add(tp_wrapper)
+
+        for root_tp in filter_roots:
+            filter_tree = FilterTree()
+            self.__filter_trees[root_tp.defined_by].append(filter_tree)
+            self.__build_filter_tree(filter_tree, root_tp)
+
+    def __build_filter_tree(self, fp, tp):
+        if isinstance(tp.s, Variable):
+            fp.add_variable(tp.s)
+            next_tps = list(self.__plan.subjects(AGORA.object, tp.subject_node))
+            for tp_node in next_tps:
+                tp = self.patterns[tp_node]
+                self.__build_filter_tree(fp, tp)
+
+    @property
+    def spaces(self):
+        return iter(self.__spaces.keys())
+
+    @property
+    def patterns(self):
+        return self.__patterns
+
+    def space_patterns(self, space):
+        # type: (BNode) -> iter
+        return self.__spaces[space]
+
+    def filter_trees(self, space):
+        return self.__filter_trees[space]
+
+
+class PlanWrapper(object):
+    def __init__(self, plan):
+        self.__ss = SSWrapper(plan)
+        self.__graph = PlanGraph(plan, self.__ss)
+
+    @property
+    def graph(self):
+        return self.__graph
+
+    @property
+    def roots(self):
+        return [(node, data) for (node, data) in self.__graph.nodes(data=True) if not self.__graph.predecessors(node)]
+
+    def successors(self, node):
+        # type: (BNode) -> iter
+
+        def filter_weight((n, n_data, edge_data)):
+            weight = 2
+            if edge_data.get('onProperty', None) is not None:
+                weight = 1
+            for tp in n_data.get('byPattern', []):
+                if isinstance(tp.o, Literal):
+                    weight = 0
+                    break
+            return weight
+
+        suc = [(suc, self.__graph.get_node_data(suc), self.__graph.get_edge_data(node, suc)) for suc in
+               self.__graph.successors(node)]
+        return sorted(suc, key=lambda x: filter_weight(x))
+
+    def filter(self, resource, space, variable):
+        for f in self.__ss.filter_trees(space):
+            f.filter(resource, space, variable)
+
+    def is_filtered(self, resource, space, variable=None):
+        filters = self.__ss.filter_trees(space)
+        if filters:
+            for f in self.__ss.filter_trees(space):
+                if variable is None:
+                    if not any([f.is_filtered(resource, space, v) for v in f.variables]):
+                        return False
+                else:
+                    if not f.is_filtered(resource, space, variable):
+                        return False
+            return True
+        return False
+
+
 class PlanExecutor(object):
     def __init__(self, plan):
-        self.__plan_graph = plan
-        self.__fragment = set([])
-        self.__uri_cache = {}
-        self.__node_spaces = {}
-        self.__node_patterns = {}
-        self.__spaces = None
-        self.__patterns = {}
-        self.__property_paths = nx.DiGraph()
-        self.__subjects_to_ignore = {}
-        self.__resource_queue = {}
+
+        self.__wrapper = PlanWrapper(plan)
+        self.__plan = plan
         self.__resource_lock = RLock()
+        self.__locks = {}
         self.__completed = False
         self.__last_success_format = None
         self.__last_iteration_ts = dt.now()
         self.__fragment_ttl = sys.maxint
         self.__last_ttl_ts = None
 
-        # Request a search plan on initialization and extract patterns and spaces
-        self.__extract_patterns_and_spaces()
-
     @property
     def ttl(self):
         return self.__fragment_ttl
 
-    def __extract_patterns_and_spaces(self):
-        """
-        Analyses the search plan graph in order to build the required data structures from patterns
-        and spaces.
-        :return:
-        """
-
-        def __decorate_nodes(nodes, space):
-            """
-            Performs a backward search from a list of pattern nodes and assigns a set of search spaces
-            to all encountered nodes.
-            """
-            for n in nodes:
-                if n not in self.__node_spaces:
-                    self.__node_spaces[n] = set([])
-                self.__node_spaces[n].add(space)
-                pred_nodes = list(self.__plan_graph.subjects(AGORA.next, n))
-                for pred in pred_nodes:
-                    links = list(self.__plan_graph.objects(subject=n, predicate=AGORA.onProperty))
-                    expected_types = list(self.__plan_graph.objects(subject=n, predicate=AGORA.expectedType))
-                    link = links.pop() if links else None
-                    self.__property_paths.add_edge(pred, n, link=link, expected_types=expected_types)
-                if pred_nodes:
-                    __decorate_nodes(pred_nodes, space)
-
-        # Extract all search spaces in the plan and build a dictionary of subjects-to-ignore per each of them.
-        # Ignored subjects are those that won't be dereferenced due to a explicit graph pattern (object) filter,
-        # e.g. ?s doap:name "jenkins" -> All ?s that don't match the filter will be ignored.
-        self.__spaces = set(self.__plan_graph.subjects(RDF.type, AGORA.SearchSpace))
-        self.__subjects_to_ignore = dict([(sp, set([])) for sp in self.__spaces])
-
-        patterns = list(self.__plan_graph.subjects(RDF.type, AGORA.TriplePattern))
-        for tp in patterns:
-            # A triple pattern belongs to a UNIQUE search space
-            space = list(self.__plan_graph.subjects(AGORA.definedBy, tp)).pop()
-            self.__patterns[tp] = {'space': space}
-
-            # Depending on the format of each triple pattern (either '?s a Concept' or '?s prop O'),
-            # it is required to extract different properties.
-            tp_pred = list(self.__plan_graph.objects(tp, predicate=AGORA.predicate)).pop()
-
-            if tp_pred == RDF.type:  # ?s a Concept
-                self.__patterns[tp]['type'] = list(self.__plan_graph.objects(tp, predicate=AGORA.object)).pop()
-                try:
-                    check_type = list(self.__plan_graph.objects(tp, predicate=AGORA.checkType)).pop().toPython()
-                except IndexError:
-                    check_type = True
-                self.__patterns[tp]['check'] = check_type
-            else:  # ?s prop O
-                self.__patterns[tp]['property'] = tp_pred
-                tp_obj = list(self.__plan_graph.objects(tp, predicate=AGORA.object)).pop()
-                if (tp_obj, RDF.type, AGORA.Literal) in self.__plan_graph:  # In case O is a Literal
-                    self.__patterns[tp]['filter_object'] = list(self.__plan_graph.objects(tp_obj, AGORA.value)).pop()
-                elif isinstance(tp_obj, URIRef):
-                    self.__patterns[tp]['filter_object'] = tp_obj
-
-                tp_sub = list(self.__plan_graph.objects(tp, predicate=AGORA.subject)).pop()
-                if isinstance(tp_sub, URIRef):
-                    self.__patterns[tp]['filter_subject'] = tp_sub
-
-            # Get all pattern nodes (those that have a byPattern properties) of the search plan and search backwards
-            # in order to set the scope of each search space.
-            nodes = list(self.__plan_graph.subjects(AGORA.byPattern, tp))
-            for n in nodes:
-                if n not in self.__node_patterns:
-                    self.__node_patterns[n] = set([])
-                self.__node_patterns[n].add(tp)
-
-            self.__property_paths.add_nodes_from(nodes)
-            __decorate_nodes(nodes, space)
+    def resource_lock(self, uri):
+        with self.__resource_lock:
+            if uri not in self.__locks:
+                self.__locks[uri] = Lock()
+            return self.__locks[uri]
 
     def get_fragment(self, **kwargs):
         """
@@ -237,26 +380,8 @@ class PlanExecutor(object):
 
         return graph
 
-    def get_fragment_generator(self, on_load=None, on_seeds=None, on_plink=None, on_link=None, on_type=None,
-                               on_type_validation=None, on_tree=None, workers=None, stop_event=None, queue_wait=None,
-                               queue_size=100, cache=None, loader=None):
-        """
-        Create a fragment generator that executes the search plan.
-        :param on_load: Function to be called just after a new URI is dereferenced
-        :param on_seeds: Function to be called just after a seed of a tree is identified
-        :param on_plink: Function to be called when a pattern link is reached
-        :param on_link: Function to be called when following a property that is not of a pattern
-        :param on_type: Function to be called when search for a type triple
-        :param on_type_validation: Function to be called just after a type is validated
-        :param on_tree: Function to be called just before a tree is going to be explored
-        :param cache:
-        :param queue_size:
-        :param workers:
-        :param stop_event:
-        :param queue_wait:
-        :param lazy:
-        :return:
-        """
+    def get_fragment_generator(self, workers=None, stop_event=None, queue_wait=None, queue_size=100, cache=None,
+                               loader=None):
 
         if workers is None:
             workers = multiprocessing.cpu_count()
@@ -318,59 +443,52 @@ class PlanExecutor(object):
             uri = uri.toPython()
             uri = uri.encode('utf-8')
 
-            # log.debug(u'Dereferencing {}'.format(uri))
-
             def treat_resource_content(parse_format):
+
                 try:
                     resource = __open_graph(uri, loader=loader, format=parse_format)
+                    if isinstance(resource, bool):
+                        return resource
+
                 except Exception, e:
                     traceback.print_exc()
                     log.warn(e.message)
-                    resource = True
-
-                if isinstance(resource, bool):
-                    return resource
+                    return
 
                 g, ttl = resource
-                with self.__resource_lock:
-                    __update_fragment_ttl()
-                    self.__fragment_ttl = min(self.__fragment_ttl, ttl)
 
                 try:
-                    for triple in g:
-                        tg.get_context(uri).add(triple)
+                    __update_fragment_ttl()
+                    self.__fragment_ttl = min(self.__fragment_ttl, ttl)
+                    tg.get_context(uri).__iadd__(g)
                     return True
                 finally:
                     if g is not None:
                         __release_graph(g)
 
-            """
-            Load in a tree graph the set of triples contained in uri, trying to not deference the same uri
-            more than once in the context of a search plan execution
-            :param tg: The graph to be loaded with all the triples obtained from uri
-            :param uri: A resource uri to be dereferenced
-            :return:
-            """
-            if tg.get_context(uri):
-                return
+            with self.resource_lock(uri):
+                if tg.get_context(uri):
+                    return
 
-            loaded = False
-            for fmt in sorted(_accept_mimes.keys(), key=lambda x: x != self.__last_success_format):
-                loaded = treat_resource_content(fmt)
-                if loaded:
-                    self.__last_success_format = fmt
-                    break
+                for fmt in sorted(_accept_mimes.keys(), key=lambda x: x != self.__last_success_format):
+                    if treat_resource_content(fmt):
+                        self.__last_success_format = fmt
+                        break
 
-            if loaded and on_load is not None:
-                triples = list(tg.get_context(uri).triples((None, None, None)))
-                on_load(uri, triples)
+        def __check_expected_types(seed, tree_graph, types):
+            if not types:
+                return True
+            for _, _, t in tree_graph.triples((seed, RDF.type, None)):
+                if t in types:
+                    return True
+            return False
 
         def __process_link_seed(seed, tree_graph, link, next_seeds, expected_types=None):
             __check_stop()
             try:
                 __dereference_uri(tree_graph, seed)
-                if expected_types is None or any([(seed, RDF.type, t) in tree_graph for t in expected_types]):
-                    seed_pattern_objects = tree_graph.objects(subject=seed, predicate=link)
+                if __check_expected_types(seed, tree_graph, expected_types):
+                    seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == link]
                     next_seeds.update(seed_pattern_objects)
             except Exception as e:
                 traceback.print_exc()
@@ -383,197 +501,142 @@ class PlanExecutor(object):
             except:
                 pass
             seed_pattern_objects = set([])
-            if expected_types is None or any([(seed, RDF.type, t) in tree_graph for t in expected_types]):
-                seed_pattern_objects = tree_graph.objects(subject=seed, predicate=pattern_link)
+            if __check_expected_types(seed, tree_graph, expected_types):
+                seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == pattern_link]
             return seed_pattern_objects
 
         def __check_stop():
             if stop_event.isSet():
-                with self.__resource_lock:
-                    self.__fragment.clear()
-                    for tg in self.__resource_queue.keys():
-                        try:
-                            tg.remove((None, None, None))
-                            tg.store.close()
-                        except KeyError:
-                            pass
-                        tg.close()
-                        __release_graph(tg)
-                    self.__plan_graph = None
-                    self.__uri_cache = None
-                    self.__node_spaces = None
-                    self.__node_patterns = None
-                    self.__spaces = None
-                    self.__patterns = None
-                    self.__subjects_to_ignore.clear()
-                    self.__resource_queue.clear()
                 gc.collect()
                 raise StopException()
 
-        def __put_triple_in_queue(quad):
+        def __put_quad_in_queue(quad):
             if (dt.now() - self.__last_iteration_ts).total_seconds() > 100:
                 log.info('Aborted fragment collection!')
                 stop_event.set()
             fragment_queue.put(quad, timeout=queue_wait)
 
-        def __follow_node(node, tree_graph, seed_space, seed):
-            """
-            Recursively search for relevant triples following the current node and all its successors
-            :param node: Tree node to be followed
-            :param tree_graph:
-            :param seed_space:
-            :param seed: Collected seed for the current node
-            :return:
-            """
-
-            def node_has_filter(x):
-                """
-                Check if a node is a pattern node and has an object filter
-                """
-                p_node = list(self.__plan_graph.objects(subject=x, predicate=AGORA.byPattern))
-                try:
-                    p_node = p_node.pop()
-                    return 'filter_object' in self.__patterns[p_node] or 'filter_subject' in self.__patterns[p_node]
-                except IndexError:
-                    return False
-
+        def __follow_node(node, seed, tree_graph):
+            candidates = []
             try:
-                # Get the sorted list of current node's successors
-                try:
-                    nxt = sorted(list(self.__property_paths.successors(node)),
-                                 key=lambda x: node_has_filter(x), reverse=True)
-                except nx.NetworkXError, e:
-                    print e.message
-                    print node
-                    nxt = None
+                for n, n_data, e_data in self.__wrapper.successors(node):
+                    expected_types = e_data.get('expectedType', None)
+                    patterns = n_data.get('byPattern', [])
+                    on_property = e_data.get('onProperty', None)
 
-                # Per each successor...
-                for n in nxt:
-                    if seed_space in self.__node_spaces[n]:
-                        node_patterns = self.__node_patterns.get(n, [])
-                        edge_data = self.__property_paths.get_edge_data(node, n)
-                        expected_types = edge_data.get('expect_types', None)
-                        link = edge_data.get('link', None)
-                        filter_next_seeds = set([])
-                        next_seeds = set([])
-                        # If the current node is a pattern node, it must search for triples to yield
-                        for pattern in node_patterns:
-                            pattern_space = self.__patterns[pattern].get('space', None)
-                            if pattern_space != seed_space or seed in self.__subjects_to_ignore[pattern_space]:
+                    seed_variables = set([])
+                    for space in n_data['spaces']:
+                        for tp in patterns:
+                            seed_variables.add(tp.s)
+
+                            if space != tp.defined_by:
                                 continue
 
-                            subject_filter = self.__patterns[pattern].get('filter_subject', None)
-                            if subject_filter is not None and seed != subject_filter:
-                                self.__subjects_to_ignore[pattern_space].add(seed)
+                            if self.__wrapper.is_filtered(seed, space, tp.s):
                                 continue
 
-                            pattern_link = self.__patterns[pattern].get('property', None)
+                            if isinstance(tp.s, URIRef) and seed != tp.s:
+                                continue
 
-                            # If pattern is of type '?s prop O'...
-                            if pattern_link is not None:
-                                if (seed, pattern_link) not in self.__fragment:
-                                    obj_filter = self.__patterns[pattern].get('filter_object', None)
-                                    if on_plink is not None:
-                                        on_plink(pattern_link, [seed], pattern_space)
+                            if tp.p != RDF.type:
+                                try:
+                                    sobs = list(__process_pattern_link_seed(seed, tree_graph, tp.p,
+                                                                            expected_types=expected_types))
 
-                                    seed_was_filtered = True
-                                    try:
-                                        sobs = list(__process_pattern_link_seed(seed, tree_graph, pattern_link,
-                                                                                expected_types=expected_types))
+                                    # TODO: This may not apply when considering OPTIONAL support
+                                    if not isinstance(tp.o, Variable) and not sobs:
+                                        self.__wrapper.filter(seed, space, tp.s)
 
-                                        for seed_object in sobs:
-                                            __check_stop()
+                                    if not sobs:
+                                        self.__wrapper.filter(seed, space, tp.s)
 
-                                            quad = (pattern, seed, pattern_link, seed_object)
-                                            if obj_filter is None or seed_object.n3() == obj_filter.n3():
-                                                self.__fragment.add((seed, pattern_link))
-                                                __put_triple_in_queue(quad)
-                                                seed_was_filtered = False
-                                                if isinstance(obj_filter, URIRef):
-                                                    filter_next_seeds.add(obj_filter)
-                                        if obj_filter is not None and seed_was_filtered:
-                                            self.__subjects_to_ignore[pattern_space].add(seed)
-                                    except AttributeError as e:
-                                        log.warning('Trying to find {} objects of {}: {}'.format(link, seed, e.message))
+                                    for object in sobs:
+                                        __check_stop()
 
-                            # If pattern is of type '?s a Concept'...
-                            obj_type = self.__patterns[pattern].get('type', None)
-                            if obj_type is not None:
-                                check_type = self.__patterns[pattern].get('check', False)
-                                if on_type is not None:
-                                    on_type(obj_type, [seed], pattern_space)
-
+                                        if not isinstance(tp.o, Variable) and object.n3() != tp.o.n3():
+                                            self.__wrapper.filter(seed, space, tp.s)
+                                        else:
+                                            candidate = (tp, seed, object)
+                                            candidates.append(candidate)
+                                except AttributeError as e:
+                                    log.warning('Trying to find {} objects of {}: {}'.format(tp.p, seed, e.message))
+                            else:
                                 __dereference_uri(tree_graph, seed)
                                 try:
-                                    seed_objects = list(tree_graph.objects(subject=seed, predicate=link))
+                                    seed_objects = list(tree_graph.objects(subject=seed, predicate=on_property))
                                     for seed_object in seed_objects:
-                                        type_triple = (pattern, seed_object, RDF.type, obj_type)
                                         # In some cases, it is necessary to verify the type of the seed
-                                        if (seed_object, obj_type) not in self.__fragment:
-                                            if check_type:
-                                                __dereference_uri(tree_graph, seed_object)
-                                                types = list(
-                                                    tree_graph.objects(subject=seed_object, predicate=RDF.type))
-                                                if obj_type in types:
-                                                    self.__fragment.add((seed_object, obj_type))
-                                                    __put_triple_in_queue(type_triple)
-                                                else:
-                                                    self.__subjects_to_ignore[pattern_space].add(seed_object)
-                                            else:
-                                                self.__fragment.add((seed_object, obj_type))
-                                                __put_triple_in_queue(type_triple)
+                                        put_quad = True
+                                        if tp.check:
+                                            __dereference_uri(tree_graph, seed_object)
+                                            types = list(
+                                                tree_graph.objects(subject=seed_object, predicate=RDF.type))
+                                            if tp.o not in types:
+                                                put_quad = False
+
+                                        if put_quad:
+                                            candidates.append((tp, seed_object, tp.o))
                                 except AttributeError as e:
-                                    log.warning('Trying to find {} objects of {}: {}'.format(link, seed, e.message))
+                                    log.warning(
+                                        'Trying to find {} objects of {}: {}'.format(on_property, seed, e.message))
 
-                        # If the current node is not a leaf... go on finding seeds for the successors
-                        if link is not None and seed not in self.__subjects_to_ignore[seed_space]:
-                            if on_link is not None:
-                                on_link(link, [seed], seed_space)
-                            __process_link_seed(seed, tree_graph, link, next_seeds, expected_types=expected_types)
+                        next_seeds = set([])
 
-                        if filter_next_seeds:
-                            next_seeds = set.intersection(next_seeds, filter_next_seeds)
+                        if on_property is not None:
+                            if seed_variables:
+                                if all([self.__wrapper.is_filtered(seed, space, v) for v in seed_variables]):
+                                    continue
 
-                        chs = list(chunks(list(next_seeds), min(len(next_seeds), max(1, workers / 2))))
-                        next_seeds.clear()
+                            __process_link_seed(seed, tree_graph, on_property, next_seeds,
+                                                expected_types=expected_types)
+
                         try:
-                            while True:
+                            threads = []
+                            for s in next_seeds:
                                 __check_stop()
-                                chunk = chs.pop()
-                                threads = []
-                                for s in chunk:
-                                    try:
-                                        workers_queue.put_nowait(s)
-                                        future = pool.submit(__follow_node, n, tree_graph, seed_space, s)
-                                        threads.append(future)
-                                    except Queue.Full:
-                                        # If all threads are busy...I'll do it myself
-                                        __follow_node(n, tree_graph, seed_space, s)
+                                try:
+                                    workers_queue.put_nowait(s)
+                                    future = pool.submit(__follow_node, n, s, tree_graph)
+                                    threads.append(future)
+                                except Queue.Full:
+                                    # If all threads are busy...I'll do it myself
+                                    __follow_node(n, s, tree_graph)
 
-                                wait(threads)
-                                [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                                if len(threads) >= workers / 2:
+                                    wait(threads)
+                                    [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                                    threads = []
 
-                                # for s in chunk:
-                                #     try:
-                                #         workers_queue.put_nowait(s)
-                                #         future = pool.submit(__follow_node, n, tree_graph, seed_space, s)
-                                #         threads.append(future)
-                                #     except Queue.Full:
-                                #         # If all threads are busy...I'll do it myself
-                                #         __follow_node(n, tree_graph, seed_space, s)
-                                #     except Queue.Empty:
-                                #         pass
-                                #
-                                # wait(threads)
-                                # [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                            wait(threads)
+                            [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                            next_seeds.clear()
                         except (IndexError, KeyError):
-                            pass
+                            traceback.print_exc()
+
+                predicate_pass = {}
+                quads = set([])
+                for (tp, seed, object) in candidates:
+                    quad = (tp.node, seed, tp.p, object)
+                    passing = True
+                    passing = passing and not self.__wrapper.is_filtered(seed, space, tp.s)
+                    passing = passing and not self.__wrapper.is_filtered(object, space, tp.o)
+                    if not passing:
+                        if tp.p not in predicate_pass:
+                            predicate_pass[tp.p] = False
+                        continue
+
+                    predicate_pass[tp.p] = True
+                    quads.add(quad)
+
+                if all(predicate_pass.values()):
+                    for (c, s, p, o) in quads:
+                        __put_quad_in_queue((c, s, p, o))
+
             except Queue.Full:
                 stop_event.set()
             except Exception as e:
                 traceback.print_exc()
                 log.error(e.message)
-                return
 
         def get_fragment_triples():
             """
@@ -582,95 +645,55 @@ class PlanExecutor(object):
             """
 
             def execute_plan():
-                for tree in trees:
-                    if on_tree is not None:
-                        on_tree(tree)
+                futures = []
 
+                for tree, data in self.__wrapper.roots:
                     # Prepare an dedicated graph for the current tree and a set of type triples (?s a Concept)
                     # to be evaluated retrospectively
                     tree_graph = __create_graph()
 
                     try:
-                        self.__resource_queue[tree_graph] = []
-
                         # Get all seeds of the current tree
-                        seeds = list(self.__plan_graph.objects(tree, AGORA.hasSeed))
-                        if on_seeds is not None:
-                            on_seeds(seeds)
-
+                        seeds = set(data['seeds'])
                         # Check if the tree root is a pattern node and in that case, adds a type triple to the
                         # respective set
-                        root_pattern = list(self.__plan_graph.objects(tree, AGORA.byPattern))
-                        if len(root_pattern):
-                            pattern_node = list(
-                                self.__plan_graph.objects(subject=tree, predicate=AGORA.byPattern)).pop()
-                            seed_type = self.__patterns[pattern_node].get('type', None)
-                            [type_triples.add((pattern_node, sd, seed_type)) for sd in seeds]
+                        tree_patterns = data.get('byPattern', [])
+                        root_type_candidates = set([])
+                        for tp in [tp for tp in tree_patterns if tp.p == RDF.type]:
+                            [root_type_candidates.add((tp, seed, tp.o)) for seed in seeds]
 
-                        # Get the children of the root node and follow them recursively
-                        nxt = list(self.__plan_graph.objects(tree, AGORA.next))
-                        if len(nxt):
-                            # Prepare the list of seeds to start the exploration with, taking into account all
-                            # search spaces that were defined
-                            s_seeds = set(seeds)
-                            futures = []
-                            for sp in self.__spaces:
-                                for seed in s_seeds:
-                                    futures.append(pool.submit(__follow_node, tree, tree_graph, sp, seed))
-                                    if len(futures) >= workers:
-                                        wait(futures)
-                                        futures = []
-                            wait(futures)
+                        for seed in seeds:
+                            futures.append(pool.submit(__follow_node, tree, seed, tree_graph))
+                        wait(futures)
+
+                        for (tp, seed, type) in root_type_candidates:
+                            passing = not self.__wrapper.is_filtered(seed, tp.defined_by, tp.s)
+                            if not passing:
+                                continue
+
+                            __put_quad_in_queue((tp.node, seed, RDF.type, type))
+
                     finally:
                         __release_graph(tree_graph)
 
                 self.__completed = True
                 __update_fragment_ttl()
 
-            def get_tree_length(x):
-                """
-                Return the value of the Agora length property in the given tree node
-                :param x:
-                :return:
-                """
-                length = list(self.__plan_graph.objects(subject=x, predicate=AGORA.length)).pop()
-                return length
-
-            # Get all search trees contained in the search plan and sort them by length. A shorter tree is going
-            # to be explored first.
-            trees = self.__plan_graph.subjects(RDF.type, AGORA.SearchTree)
-            trees = sorted(trees, key=lambda x: get_tree_length(x))
-
-            type_triples = set([])
-
             thread = Thread(target=execute_plan)
             thread.daemon = True
             thread.start()
 
             while not self.__completed or fragment_queue.not_empty:
+
                 try:
                     (t, s, p, o) = fragment_queue.get(timeout=0.001)
                     fragment_queue.task_done()
-                    if p == RDF.type:
-                        type_triples.add((t, s, o))
-                    else:
-                        yield (t, s, p, o)
+                    yield (t, s, p, o)
                 except Queue.Empty:
                     if self.__completed:
                         break
                 self.__last_iteration_ts = dt.now()
             thread.join()
 
-            # All type triples that are of subjects to ignore won't be returned (this has to be done this way
-            # because of generators nature)
-            all_ignores = {}
-            if self.__subjects_to_ignore.values():
-                all_ignores = set.intersection(*self.__subjects_to_ignore.values())
-            valid_type_triples = [(t, s, o) for (t, s, o) in type_triples if s not in all_ignores]
-            for (t, s, o) in valid_type_triples:
-                if on_type_validation is not None:
-                    on_type_validation((t, s, RDF.type, o))
-                yield (t, s, RDF.type, o)
-
-        return {'generator': get_fragment_triples(), 'prefixes': self.__plan_graph.namespaces(),
-                'plan': self.__plan_graph}
+        return {'generator': get_fragment_triples(), 'prefixes': self.__plan.namespaces(),
+                'plan': self.__plan}

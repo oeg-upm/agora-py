@@ -31,13 +31,10 @@ class RemoteCollector(AbstractCollector):
         self.__planner = pc(host, port) if planner is None else planner
         self.__fragment = fc(host, port)
 
-    def get_fragment(self, *tps):
-        generator = self.__fragment.agp_fragment(*tps)
-        return generator
-
-    def get_fragment_generator(self, *tps):
-        plan = self.__planner.make_plan(*tps)
-        generator = self.__fragment.agp_fragment(*tps)
+    def get_fragment_generator(self, agp, **kwargs):
+        # type: (AGP, dict) -> dict
+        plan = self.__planner.make_plan(agp)
+        generator = self.__fragment.agp_fragment(agp)
         fragment_dict = {'prefixes': self.prefixes, 'plan': plan, 'generator': generator}
         return fragment_dict
 

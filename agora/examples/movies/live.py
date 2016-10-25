@@ -28,6 +28,9 @@ from agora.engine.fountain.onto import DuplicateVocabulary
 from agora.examples.movies import load_films_from_dbpedia
 from datetime import datetime
 
+from networkx import Graph
+from rdflib import ConjunctiveGraph
+
 __author__ = 'Fernando Serena'
 
 # Setup logging level for Agora
@@ -51,9 +54,19 @@ for film in load_films_from_dbpedia():
         pass
 
 # Example queries
-queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor
-                              OPTIONAL { ?actor dbp:birthName ?name }
-                              }"""]
+# queries = ["""SELECT DISTINCT ?name WHERE {?film foaf:name ?name .
+#                                            ?film dbpedia-owl:starring ?actor .
+#                                            OPTIONAL {?actor dbp:birthName "Mary Cathleen Collins"@en }
+#                                           }"""]
+
+# queries = ["""SELECT * WHERE {?film foaf:name ?name .
+#                                            ?film dbpedia-owl:starring ?actor
+#                                           }"""]
+
+queries = ["""SELECT DISTINCT ?actor WHERE { ?film foaf:name "10"@en .
+                                             ?film dbpedia-owl:starring ?actor .
+                                             ?actor dbp:birthName "Mary Cathleen Collins"@en
+                                          }"""]
 
 # queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor ;
 #                                  dbp:birthName ?name .
@@ -61,11 +74,18 @@ queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor
 
 elapsed = []
 
+g = ConjunctiveGraph()
+
+# for c, s, p, o in agora.fragment(queries[0])['generator']:
+#     g.get_context(c).add((s, p, o))
+#
+# print g.serialize(format='turtle')
+
 for query in queries:
     pre = datetime.now()
-    # Ask agora for results of the given query,
-    # evaluating candidate results for each fragment triple collected (chunk_size=1)
-    # -> Removing chunk_size argument forces to wait until all relevant triples are collected
+# Ask agora for results of the given query,
+# evaluating candidate results for each fragment triple collected (chunk_size=1)
+# -> Removing chunk_size argument forces to wait until all relevant triples are collected
     for row in agora.query(query):
         print row.asdict()
     post = datetime.now()

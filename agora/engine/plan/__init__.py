@@ -25,7 +25,7 @@ from abc import abstractmethod
 from datetime import datetime
 
 import agora.engine.plan.join
-from agora.engine.plan.agp import AgoraGP
+from agora.engine.plan.agp import AGP
 from agora.engine.plan.graph import graph_plan
 from rdflib import RDF
 
@@ -79,21 +79,16 @@ def _get_tp_paths(fountain, agp):
 
 
 class Plan(object):
-    def __init__(self, fountain, *tps):
-        # type: (Fountain, list) -> Plan
+    def __init__(self, fountain, agp):
+        # type: (Fountain, AGP) -> Plan
         self.__fountain = fountain
-        gp = '{ %s }' % ' . '.join(tps)
-        agora_gp = AgoraGP.from_string(gp, fountain.prefixes)
-        if agora_gp is None:
-            raise AttributeError('{} is not a valid graph pattern'.format(gp))
-
-        log.debug('Agora Graph Pattern:\n{}'.format(agora_gp.graph.serialize(format='turtle')))
+        log.debug('Agora Graph Pattern:\n{}'.format(agp.graph.serialize(format='turtle')))
 
         try:
-            search, hints = _get_tp_paths(fountain, agora_gp.graph)
+            search, hints = _get_tp_paths(fountain, agp.graph)
             self.__plan = {
-                "plan": [{"context": agora_gp.get_tp_context(tp), "pattern": tp, "paths": paths, "hints": hints[tp]}
-                         for (tp, paths) in search.items()], "prefixes": agora_gp.prefixes}
+                "plan": [{"context": agp.get_tp_context(tp), "pattern": tp, "paths": paths, "hints": hints[tp]}
+                         for (tp, paths) in search.items()], "prefixes": agp.prefixes}
 
             self.__g_plan = graph_plan(self.__plan, self.__fountain)
         except TypeError, e:
@@ -129,6 +124,7 @@ class Planner(AbstractPlanner):
     def fountain(self):
         return self.__fountain
 
-    def make_plan(self, *tps):
-        plan = Plan(self.__fountain, *tps)
+    def make_plan(self, agp):
+        # type: (AGP) -> Graph
+        plan = Plan(self.__fountain, agp)
         return plan.graph

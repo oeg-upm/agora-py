@@ -20,12 +20,17 @@
 """
 
 import logging
+import re
+import traceback
+from StringIO import StringIO
 from collections import namedtuple
+from operator import __add__
 from urlparse import urlparse
 
 import networkx as nx
-import re
-from rdflib import ConjunctiveGraph, URIRef, BNode, RDF, Literal
+from networkx.algorithms.isomorphism import DiGraphMatcher
+from rdflib import ConjunctiveGraph, BNode
+from rdflib import Graph
 from rdflib import Variable
 
 __author__ = 'Fernando Serena'
@@ -60,105 +65,109 @@ def is_uri(uri, prefixes):
 
 class TP(namedtuple('TP', "s p o")):
     @classmethod
-    def _make(cls, iterable, new=tuple.__new__, len=len, prefixes=None):
-        def transform_elm(elm):
-            if is_variable(elm):
-                return Variable(elm)
-            elif is_uri(elm, prefixes):
-                return URIRef(extend_uri(elm, prefixes))
-                # return URIRef(elm.lstrip('<').rstrip('>'))
-            elif elm == 'a':
-                return RDF.type
-            else:
-                datatype = None
-                if '^^' in elm:
-                    elm, datatype = elm.split('^^')
-                elm = elm.lstrip('"').rstrip('"')
-                if datatype is not None:
-                    datatype = URIRef(extend_uri(datatype, prefixes))
-                return Literal(elm, datatype=datatype)
-
-        if prefixes is None:
-            prefixes = []
-        res = filter(lambda x: x, map(transform_elm, iterable))
-        if len(res) == 3:
-            if not (isinstance(res[0], Literal) or isinstance(res[1], Literal)):
-                return new(cls, res)
-
-        raise TypeError('Bad TP arguments: {}'.format(iterable))
+    def _make(cls, iterable, new=tuple.__new__, len=len):
+        return new(cls, iterable)
 
     def __repr__(self):
         def elm_to_string(elm):
-            if isinstance(elm, URIRef):
-                if elm == RDF.type:
-                    return 'a'
-                return '<%s>' % elm
-
-            return str(elm)
+            return elm.n3()
 
         strings = map(elm_to_string, [self.s, self.p, self.o])
         return '{} {} {}'.format(*strings)
 
     @staticmethod
-    def from_string(st, prefixes):
-        if st.endswith('"'):
-            parts = [st[st.find('"'):]]
-            st = st.replace(parts[0], '').rstrip()
-            parts = st.split(" ") + parts
-        else:
-            parts = st.split(' ')
-        return TP._make(parts, prefixes=prefixes)
+    def from_string(st, prefixes=None, graph=None):
+        # type: (str, dict) -> TP
+        st = st.strip()
+        if graph is None:
+            graph = Graph()
+        ttl = ''
+
+        if prefixes is not None:
+            for prefix, uri in prefixes.items():
+                ttl += '@prefix {}: <{}> .\n\n'.format(prefix, uri)
+
+        try:
+            graph.parse(StringIO(ttl + '\n{} .\n'.format(st)), format='turtle')
+            s, p, o = list(graph.triples((None, None, None))).pop()
+
+            return TP._make([s, p, o])
+        except Exception as e:
+            traceback.print_exc()
+            raise TypeError('Bad TP arguments: {}'.format(st))
 
 
-class AgoraGP(object):
-    def __init__(self, prefixes):
-        self._tps = []
-        self.__prefixes = prefixes
-
-    @property
-    def triple_patterns(self):
-        return self._tps
+class AGP(set):
+    def __init__(self, s=(), prefixes=None):
+        super(AGP, self).__init__(s)
+        self.__prefixes = prefixes or {}
+        self.__graph = ConjunctiveGraph()
 
     @property
     def prefixes(self):
         return self.__prefixes
 
     @property
-    def graph(self):
-        g = ConjunctiveGraph()
-        for prefix in self.__prefixes:
-            g.bind(prefix, self.__prefixes[prefix])
-        variables = {}
-
-        def nodify(elm):
-            if isinstance(elm, Variable):
-                if not (elm in variables):
-                    elm_node = BNode('?' + str(elm))
-                    variables[elm] = elm_node
-                return variables[elm]
+    def wire(self):
+        # type: () -> nx.DiGraph
+        """
+        Creates a graph from the graph pattern
+        :return: The graph (networkx)
+        """
+        g = nx.DiGraph()
+        for s, p, o in self:
+            edge_data = {'link': p}
+            g.add_node(s)
+            if isinstance(o, Variable):
+                g.add_node(o)
             else:
-                return elm
-
-        nxg = nx.Graph()
-        for (s, p, o) in self._tps:
-            nxg.add_nodes_from([s, o])
-            nxg.add_edge(s, o)
-
-        contexts = dict([(str(index), c) for (index, c) in enumerate(nx.connected_components(nxg))])
-
-        for (s, p, o) in self._tps:
-            s_node = nodify(s)
-            o_node = nodify(o)
-            p_node = nodify(p)
-
-            context = None
-            for uid in contexts:
-                if s in contexts[uid]:
-                    context = str(uid)
-
-            g.get_context(context).add((s_node, p_node, o_node))
+                g.add_node(o, filter=o)
+                edge_data['to'] = o
+            g.add_edge(s, o, **edge_data)
 
         return g
+
+    def __nodify(self, elm, variables):
+        if isinstance(elm, Variable):
+            if elm not in variables:
+                elm_node = BNode('?' + str(elm))
+                variables[elm] = elm_node
+            return variables[elm]
+        else:
+            return elm
+
+    def __iter__(self):
+        for x in super(AGP, self).__iter__():
+            yield x if isinstance(x, TP) else TP.from_string(x, prefixes=self.__prefixes)
+
+    @property
+    def graph(self):
+
+        if not self.__graph:
+            for prefix in self.__prefixes:
+                self.__graph.bind(prefix, self.__prefixes[prefix])
+            variables = {}
+
+            nxg = nx.Graph()
+            for (s, p, o) in self:
+                nxg.add_nodes_from([s, o])
+                nxg.add_edge(s, o)
+
+            contexts = dict([(str(index), c) for (index, c) in enumerate(nx.connected_components(nxg))])
+
+            for (s, p, o) in self:
+                s_node = self.__nodify(s, variables)
+                o_node = self.__nodify(o, variables)
+                p_node = self.__nodify(p, variables)
+
+                context = None
+                for uid in contexts:
+                    if s in contexts[uid]:
+                        context = str(uid)
+
+                self.__graph.get_context(context).add((s_node, p_node, o_node))
+
+        return self.__graph
 
     @staticmethod
     def from_string(st, prefixes):
@@ -167,14 +176,50 @@ class AgoraGP(object):
             st = st.replace('{', '').replace('}', '').strip()
             tps = re.split('\. ', st)
             tps = map(lambda x: x.strip().strip('.'), filter(lambda y: y != '', tps))
-            gp = AgoraGP(prefixes)
+            gp = AGP(prefixes=prefixes)
             for tp in tps:
-                gp.triple_patterns.append(TP.from_string(tp, gp.prefixes))
+                gp.add(TP.from_string(tp, gp.prefixes))
         return gp
 
     def get_tp_context(self, (s, p, o)):
         return str(list(self.graph.contexts((s, p, o))).pop().identifier)
 
     def __repr__(self):
-        tp_strings = map(lambda x: str(x), self._tps)
-        return '{ %s}' % reduce(lambda x, y: (x + '%s . ' % str(y)), tp_strings, '')
+        return '{ %s }' % ' . '.join([str(tp) for tp in self])
+        # tp_strings = map(lambda x: str(x), self)
+        # return '{ %s}' % reduce(lambda x, y: (x + '%s . ' % str(y)), tp_strings, '')
+
+    def mapping(self, other):
+        # type: (AGP) -> iter
+        """
+        :return: If there is any, the mapping with another graph pattern
+        """
+        if not isinstance(other, AGP):
+            return ()
+
+        my_wire = self.wire
+        others_wire = other.wire
+
+        def __node_match(n1, n2):
+            return n1 == n2
+
+        def __edge_match(e1, e2):
+            return e1 == e2
+
+        matcher = DiGraphMatcher(my_wire, others_wire, node_match=__node_match, edge_match=__edge_match)
+        mapping = list(matcher.isomorphisms_iter())
+        if len(mapping) == 1:
+            return mapping.pop()
+        else:
+            return dict()
+
+    def __eq__(self, other):
+        # type: (AGP) ->  bool
+        """
+        Two graph patterns are equal if they are isomorphic**
+        """
+        if not isinstance(other, AGP):
+            return super(AGP, self).__eq__(other)
+
+        mapping = self.mapping(other)
+        return mapping is not None
