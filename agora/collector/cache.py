@@ -51,6 +51,7 @@ class RedisCache(object):
         self.__cache_key = '{}:cache'.format(key_prefix)
         self.__locks = {}
         self.__lock = Lock()
+        self.__uuids = {}
         self.__persist_mode = persist_mode
         self.__min_cache_time = min_cache_time
         self.__base_path = base
@@ -60,6 +61,16 @@ class RedisCache(object):
         self._r = get_kv(persist_mode, redis_host, redis_port, redis_db, redis_file)
 
         self.__resources_ts = {}
+
+        cached_uris = 0
+        for uuid_key in self._r.keys('{}:*uri'.format(key_prefix)):
+            uuid = uuid_key.split(':')[1]
+            uri = self._r.get(uuid_key)
+            if uri is not None:
+                self.__uuids[uri] = uuid
+                cached_uris += 1
+
+        log.info('Recovered {} cached resources'.format(cached_uris))
 
         self.__enabled = True
         self.__purge_th = Thread(target=self.__purge)
@@ -118,13 +129,16 @@ class RedisCache(object):
                     with self._r.pipeline(transaction=True) as p:
                         p.multi()
                         log.debug('Removing {} resouces from cache...'.format(len(obsolete)))
-                        for gid in obsolete:
+                        for uuid in obsolete:
+                            uri_key = '{}:{}:uri'.format(self.__key_prefix, uuid)
+                            gid = self._r.get(uri_key)
                             with self.gid_lock(gid):
                                 try:
                                     g = self.__resource_cache.get_context(gid)
                                     g.remove((None, None, None))
                                     self.__resource_cache.remove_context(g)
-                                    p.srem(self.__cache_key, gid)
+                                    p.srem(self.__cache_key, uuid)
+                                    p.delete(uri_key)
                                     with self.__lock:
                                         del self.__locks[gid]
                                 except Exception, e:
@@ -137,17 +151,21 @@ class RedisCache(object):
             sleep(1)
 
     def create(self, conjunctive=False, gid=None, loader=None, format=None):
-        p = self._r.pipeline(transaction=True)
-        p.multi()
-
         if conjunctive:
             uuid = shortuuid.uuid()
             g = get_triple_store(self.__persist_mode, base=self.__base_path, path=uuid)
             return g
         else:
-            temp_key = '{}:{}'.format(self.__cache_key, gid)
-            g = self.__resource_cache.get_context(gid)
+            p = self._r.pipeline(transaction=True)
+            p.multi()
+
             with self.gid_lock(gid):
+                g = self.__resource_cache.get_context(gid)
+                if gid not in self.__uuids:
+                    self.__uuids[gid] = shortuuid.uuid()
+
+                temp_key = '{}:{}'.format(self.__cache_key, self.__uuids[gid])
+
                 ttl_ts = self._r.get(temp_key)
                 if ttl_ts is not None:
                     ttl = 0
@@ -186,10 +204,11 @@ class RedisCache(object):
                 cache_control = headers.get('Cache-Control', None)
                 if cache_control is not None:
                     cache_dict = parse_dict_header(cache_control)
-                    ttl = math.ceil(float(cache_dict.get('max-age', ttl)))
+                    ttl = int(math.ceil(float(cache_dict.get('max-age', ttl))))
 
                 # Let's create a new one
-                p.sadd(self.__cache_key, gid)
+                p.sadd(self.__cache_key, self.__uuids[gid])
+                p.set('{}:{}:uri'.format(self.__key_prefix, self.__uuids[gid]), gid)
 
                 ttl_ts = calendar.timegm((dt.utcnow() + delta(seconds=ttl)).timetuple())
                 p.set(temp_key, ttl_ts)
