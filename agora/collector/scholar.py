@@ -195,11 +195,18 @@ class Fragment(object):
     @classmethod
     def load(cls, kv, triples, fragments_key, fid, prefixes=None):
         # type: (redis.StrictRedis, ConjunctiveGraph, str, str) -> Fragment
-        agp = AGP(kv.smembers('{}:{}:gp'.format(fragments_key, fid)), prefixes=prefixes)
-        plan_turtle = kv.get('{}:{}:plan'.format(fragments_key, fid))
-        fragment = Fragment(agp, kv, triples, fragments_key, fid)
-        fragment.plan = Graph().parse(StringIO(plan_turtle), format='turtle')
-        return fragment
+        try:
+            agp = AGP(kv.smembers('{}:{}:gp'.format(fragments_key, fid)), prefixes=prefixes)
+            plan_turtle = kv.get('{}:{}:plan'.format(fragments_key, fid))
+            fragment = Fragment(agp, kv, triples, fragments_key, fid)
+            fragment.plan = Graph().parse(StringIO(plan_turtle), format='turtle')
+            return fragment
+        except Exception:
+            with kv.pipeline() as p:
+                with kv.pipeline() as pipe:
+                    for fragment_key in kv.keys('{}*{}*'.format(fragments_key, fid)):
+                        pipe.delete(fragment_key)
+                    pipe.execute()
 
     def save(self, pipe):
         fragment_key = '{}:{}'.format(self.__fragments_key, self.fid)
@@ -281,11 +288,12 @@ class Fragment(object):
                 self.triples.get_context(str((self.fid, tp))).__iadd__(self.triples.get_context(str((back_id, tp))))
                 self.triples.remove_context(self.triples.get_context(str((back_id, tp))))
             actual_ttl = collect_dict.get('ttl')()
-            fragment_ttl = max(actual_ttl, (datetime.utcnow() - pre_time).total_seconds())
+            elapsed = (datetime.utcnow() - pre_time).total_seconds()
+            fragment_ttl = max(actual_ttl, elapsed)
             self.updated_for(fragment_ttl)
             self.collecting = False
 
-        log.info('Finished fragment collection: {} ({} triples)'.format(self.fid, n_triples))
+        log.info('Finished fragment collection: {} ({} triples), in {}s'.format(self.fid, n_triples, elapsed))
 
     def remove(self):
         # type: () -> None
