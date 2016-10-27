@@ -21,18 +21,8 @@
 import logging
 from datetime import datetime
 
-import sys
-from threading import Thread, Event, Lock
-
-import networkx as nx
-from agora.engine.plan.graph import AGORA
-from rdflib import BNode
-from rdflib import Literal
-from rdflib import RDF
-from rdflib import URIRef
-from rdflib import Variable
-from rdflib.plugins.sparql.algebra import translateQuery
 from agora.graph.evaluate import evalQuery
+from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.parser import parseQuery
 from rdflib.plugins.sparql.processor import SPARQLResult, SPARQLProcessor
 from rdflib.plugins.sparql.sparql import Query
@@ -43,68 +33,10 @@ __author__ = 'Fernando Serena'
 log = logging.getLogger('agora.graph.processor')
 
 
-def tp_part(term):
-    if isinstance(term, Variable) or isinstance(term, BNode):
-        return '?{}'.format(str(term))
-    elif isinstance(term, URIRef):
-        return '<{}>'.format(term)
-    elif isinstance(term, Literal):
-        return term.n3()
-
-
-def chunks(l, n=None):
-    """
-    Yield successive n-sized chunks from l.
-    :param l:
-    :param n:
-    :return: Generated chunks
-    """
-
-    if n is None:
-        n = sys.maxint
-
-    if getattr(l, '__iter__') is not None:
-        l = l.__iter__()
-    finished = False
-    while not finished:
-        chunk = []
-        try:
-            context, s, p, o = l.next()
-            # last_ctx = context
-            chunk.append((s, p, o))
-            if n != len(chunk):
-                while len(chunk) < n:
-                    context, s, p, o = l.next()
-                    chunk.append((s, p, o))
-        except StopIteration:
-            finished = True
-
-        yield chunk
-
-
 class FragmentResult(SPARQLResult):
     def __init__(self, res):
         super(FragmentResult, self).__init__(res)
-        # self.gen = res['gen_']
-        # self.restore = res['restore_']
-        # self.roots = res['roots_']
-        # self.plan = res['plan_']
-        # self.agp = res['agp_']
         self.chunk_size = res.get('chunk_', None)
-        self.__collecting = None
-        self.__ready = False
-        self.__event = Event()
-        self.__event.clear()
-        self.__lock = Lock()
-
-    def __collect(self):
-        for chunk in chunks(self.gen, self.chunk_size):
-            with self.__lock:
-                self.__ready = True
-                self.__event.set()
-        with self.__lock:
-            self.__event.set()
-            self.__collecting = False
 
     def __iter__(self):
         if self.type in ("CONSTRUCT", "DESCRIBE"):
@@ -114,7 +46,6 @@ class FragmentResult(SPARQLResult):
             yield self.askAnswer
         elif self.type == 'SELECT':
             # this iterates over ResultRows of variable bindings
-
             if self._genbindings:
                 for b in self._genbindings:
                     self._bindings.append(b)
