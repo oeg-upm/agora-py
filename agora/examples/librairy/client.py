@@ -10,9 +10,12 @@ setup_logging(logging.DEBUG)
 
 agora = AgoraClient()
 
-q1 = """SELECT (COUNT(DISTINCT ?title) as ?cnt) WHERE { [] librairy:title ?title ;
-                                                            librairy:creationTime ?created
-                                                      }"""
+q1 = """SELECT * WHERE { ?s librairy:title "Model reduction for real-time fluids" ;
+                            librairy:creationTime ?created
+                        }"""
+
+
+print agora.fragment(q1).serialize(format='turtle')
 
 elapsed = []
 

@@ -24,16 +24,12 @@ def query(query, **kwargs):
     return agora.query(query, collector=scholar, **kwargs)
 
 
-def fragment(query, **kwargs):
-    return agora.fragment(query, collector=scholar, **kwargs)
-
-
-def agp_fragment(*tps, **kwargs):
-    return agora.agp_fragment(collector=scholar, *tps, **kwargs)
+def fragment(**kwargs):
+    return agora.fragment_generator(collector=scholar, **kwargs)
 
 
 server = bs(agora, query_function=query, import_name=__name__)
-bf(agora, server=server, fragment_function=fragment, agp_fragment_function=agp_fragment)
+bf(agora, server=server, fragment_function=fragment)
 bp(agora.planner, server=server)
 bn(agora.fountain, server=server)
 

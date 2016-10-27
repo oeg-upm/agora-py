@@ -47,7 +47,7 @@ except Exception:
 q1 = """SELECT * WHERE { [] a docker:Host ;
                             docker:hasImage [
                                 docker:identifier ?i ;
-                                docker:creationTime ?ts ;
+                                docker:creationTime ?ts
                             ]
                         }"""
 
@@ -65,7 +65,7 @@ q3 = """SELECT * WHERE { [] a docker:Container;
 
 elapsed = []
 
-for query in [q3] * 5:
+for query in [q1, q2, q3] * 2:
     pre = datetime.now()
     for row in agora.query(query, loader=wrapper.load):
         print row.asdict()
