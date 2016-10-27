@@ -52,6 +52,7 @@ class RedisCache(object):
         self.__locks = {}
         self.__lock = Lock()
         self.__uuids = {}
+        self.__uris = {}
         self.__persist_mode = persist_mode
         self.__min_cache_time = min_cache_time
         self.__base_path = base
@@ -68,6 +69,7 @@ class RedisCache(object):
             uri = self._r.get(uuid_key)
             if uri is not None:
                 self.__uuids[uri] = uuid
+                self.__uris[uuid] = uri
                 cached_uris += 1
 
         log.info('Recovered {} cached resources'.format(cached_uris))
@@ -112,38 +114,38 @@ class RedisCache(object):
     def __clean(self, name):
         shutil.rmtree('{}/{}'.format(self.__base_path, name))
 
-    def gid_lock(self, gid):
+    def uri_lock(self, uri):
         with self.__lock:
-            if gid not in self.__locks:
-                self.__locks[gid] = Lock()
-            return self.__locks[gid]
+            if uri not in self.__locks:
+                self.__locks[uri] = Lock()
+            return self.__locks[uri]
 
     def __purge(self):
         while self.__enabled:
             try:
                 obsolete = filter(
-                    lambda x: not self._r.exists('{}:cache:{}'.format(self.__key_prefix, x)),
-                    self._r.smembers(self.__cache_key))
+                    lambda x: not self._r.exists('{}:cache:{}'.format(self.__key_prefix, self.__uuids[x])),
+                    self.__uuids.keys())
 
                 if obsolete:
                     with self._r.pipeline(transaction=True) as p:
                         p.multi()
                         log.debug('Removing {} resouces from cache...'.format(len(obsolete)))
-                        for uuid in obsolete:
-                            uri_key = '{}:{}:uri'.format(self.__key_prefix, uuid)
-                            gid = self._r.get(uri_key)
-                            with self.gid_lock(gid):
+                        for uri in obsolete:
+                            with self.uri_lock(uri):
+                                uuid = self.__uuids[uri]
                                 try:
-                                    g = self.__resource_cache.get_context(gid)
+                                    g = self.__resource_cache.get_context(uri)
                                     g.remove((None, None, None))
                                     self.__resource_cache.remove_context(g)
-                                    p.srem(self.__cache_key, uuid)
-                                    p.delete(uri_key)
+                                    p.delete('{}:{}:uri'.format(self.__key_prefix, uuid))
                                     with self.__lock:
-                                        del self.__locks[gid]
+                                        del self.__locks[uri]
+                                    del self.__uuids[uri]
+                                    del self.__uris[uuid]
                                 except Exception, e:
                                     traceback.print_exc()
-                                    log.error('Purging resource {}'.format(gid))
+                                    log.error('Purging resource {}'.format(uri))
                                 p.execute()
             except Exception, e:
                 traceback.print_exc()
@@ -159,12 +161,15 @@ class RedisCache(object):
             p = self._r.pipeline(transaction=True)
             p.multi()
 
-            with self.gid_lock(gid):
+            with self.uri_lock(gid):
                 g = self.__resource_cache.get_context(gid)
                 if gid not in self.__uuids:
-                    self.__uuids[gid] = shortuuid.uuid()
+                    uuid = shortuuid.uuid()
+                    self.__uuids[gid] = uuid
+                    self.__uris[uuid] = gid
+                uuid = self.__uuids[gid]
 
-                temp_key = '{}:{}'.format(self.__cache_key, self.__uuids[gid])
+                temp_key = '{}:{}'.format(self.__cache_key, uuid)
 
                 ttl_ts = self._r.get(temp_key)
                 if ttl_ts is not None:
@@ -207,9 +212,9 @@ class RedisCache(object):
                     ttl = int(math.ceil(float(cache_dict.get('max-age', ttl))))
 
                 # Let's create a new one
-                p.sadd(self.__cache_key, self.__uuids[gid])
-                p.set('{}:{}:uri'.format(self.__key_prefix, self.__uuids[gid]), gid)
-
+                p.set('{}:{}:uri'.format(self.__key_prefix, uuid), gid)
+                self.__uuids[gid] = uuid
+                self.__uris[uuid] = gid
                 ttl_ts = calendar.timegm((dt.utcnow() + delta(seconds=ttl)).timetuple())
                 p.set(temp_key, ttl_ts)
                 p.expire(temp_key, ttl)
