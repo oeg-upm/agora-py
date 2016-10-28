@@ -18,6 +18,7 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+import logging
 import re
 from abc import abstractmethod
 
@@ -28,6 +29,8 @@ from rdflib import Literal
 from rdflib import URIRef
 
 __author__ = "Fernando Serena"
+
+log = logging.getLogger('agora.collector')
 
 
 class AbstractCollector(object):

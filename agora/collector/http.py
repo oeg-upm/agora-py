@@ -18,26 +18,46 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
-from agora.collector import AbstractCollector
-from agora.server.fragment import client as fc
-from agora.server.planner import client as pc
+import logging
+import math
+
+import requests
+from StringIO import StringIO
+from requests.utils import parse_dict_header
 
 __author__ = "Fernando Serena"
 
+log = logging.getLogger('agora.collector.http')
 
-class RemoteCollector(AbstractCollector):
-    def __init__(self, host='localhost', port=9002, planner=None):
-        # type: (str, int, AbstractPlanner) -> RemoteCollector
-        self.__planner = pc(host, port) if planner is None else planner
-        self.__fragment = fc(host, port)
+RDF_MIMES = {'turtle': 'text/turtle', 'xml': 'application/rdf+xml'}
 
-    def get_fragment_generator(self, agp, **kwargs):
-        # type: (AGP, dict) -> dict
-        plan = self.__planner.make_plan(agp)
-        generator = self.__fragment.agp_fragment(agp)
-        fragment_dict = {'prefixes': self.prefixes, 'plan': plan, 'generator': generator}
-        return fragment_dict
 
-    @property
-    def prefixes(self):
-        return self.__planner.fountain.prefixes
+def get_resource_ttl(headers):
+    cache_control = headers.get('Cache-Control', None)
+    ttl = None
+    if cache_control is not None:
+        cache_dict = parse_dict_header(cache_control)
+        ttl = cache_dict.get('max-age', ttl)
+        if ttl is not None:
+            ttl = math.ceil(float(ttl))
+    return ttl
+
+
+def http_get(uri, format):
+    log.debug('HTTP GET {}'.format(uri))
+    try:
+        response = requests.get(uri, headers={'Accept': RDF_MIMES[format]}, timeout=30)
+    except requests.Timeout:
+        log.debug('[Dereference][TIMEOUT][GET] {}'.format(uri))
+        return True
+    except UnicodeEncodeError:
+        log.debug('[Dereference][ERROR][ENCODE] {}'.format(uri))
+        return True
+    except Exception:
+        log.debug('[Dereference][ERROR][GET] {}'.format(uri))
+        return True
+
+    if response.status_code == 200:
+        return StringIO(response.content), response.headers
+    else:
+        return True

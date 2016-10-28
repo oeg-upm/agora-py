@@ -20,10 +20,8 @@
 """
 
 import Queue
-import StringIO
 import gc
 import logging
-import math
 import multiprocessing
 import sys
 import traceback
@@ -33,7 +31,7 @@ from threading import RLock, Thread, Event, Lock
 from xml.sax import SAXParseException
 
 import networkx as nx
-import requests
+from agora.collector.http import get_resource_ttl, RDF_MIMES, http_get
 from agora.engine.plan.graph import AGORA
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
@@ -42,95 +40,16 @@ from rdflib import Graph
 from rdflib import Literal
 from rdflib import RDFS
 from rdflib import Variable
-from requests.utils import parse_dict_header
 
-pool = ThreadPoolExecutor(max_workers=8)
+pool = ThreadPoolExecutor(max_workers=multiprocessing.cpu_count())
 
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.collector.execution')
 
-_accept_mimes = {'turtle': 'text/turtle', 'xml': 'application/rdf+xml'}
-
 
 class StopException(Exception):
     pass
-
-
-def chunks(l, n):
-    """
-    Yield successive n-sized chunks from l.
-    :param l:
-    :param n:
-    :return:
-    """
-    if n:
-        for i in xrange(0, len(l), n):
-            yield l[i:i + n]
-
-
-def __extend_uri(prefixes, short):
-    """
-    Extend a prefixed uri with the help of a specific dictionary of prefixes
-    :param prefixes: Dictionary of prefixes
-    :param short: Prefixed uri to be extended
-    :return:
-    """
-    for prefix in prefixes:
-        if short.startswith(prefix):
-            return short.replace(prefix + ':', prefixes[prefix])
-    return short
-
-
-def get_resource_ttl(headers):
-    cache_control = headers.get('Cache-Control', None)
-    ttl = None
-    if cache_control is not None:
-        cache_dict = parse_dict_header(cache_control)
-        ttl = cache_dict.get('max-age', ttl)
-        if ttl is not None:
-            ttl = math.ceil(float(ttl))
-    return ttl
-
-
-def get_content(uri, format):
-    log.debug('HTTP GET {}'.format(uri))
-    try:
-        response = requests.get(uri, headers={'Accept': _accept_mimes[format]}, timeout=30)
-    except requests.Timeout:
-        log.debug('[Dereference][TIMEOUT][GET] {}'.format(uri))
-        return True
-    except UnicodeEncodeError:
-        log.debug('[Dereference][ERROR][ENCODE] {}'.format(uri))
-        return True
-    except Exception:
-        log.debug('[Dereference][ERROR][GET] {}'.format(uri))
-        return True
-
-    if response.status_code == 200:
-        try:
-            return StringIO.StringIO(response.content), response.headers
-        except SyntaxError:
-            traceback.print_exc()
-            log.error('[Dereference][ERROR][PARSE] {}'.format(uri))
-            return False
-        except ValueError:
-            traceback.print_exc()
-            log.debug('[Dereference][ERROR][VAL] {}'.format(uri))
-            return False
-        except DBNotFoundError:
-            # Ignore this exception... it is raised due to a stupid problem with prefixes
-            return True
-        except SAXParseException:
-            traceback.print_exc()
-            log.error('[Dereference][ERROR][SAX] {}'.format(uri))
-            return False
-        except Exception:
-            traceback.print_exc()
-            log.error('[Dereference][ERROR] {}'.format(uri))
-            return True
-    else:
-        return True
 
 
 class FilterTree(set):
@@ -344,6 +263,28 @@ class PlanWrapper(object):
         return False
 
 
+def parse_rdf(graph, content, format):
+    try:
+        graph.parse(content, format=format)
+    except SyntaxError:
+        traceback.print_exc()
+        return False
+
+    except ValueError:
+        traceback.print_exc()
+        return False
+    except DBNotFoundError:
+        # Ignore this exception... it is raised due to a stupid problem with prefixes
+        traceback.print_exc()
+        return True
+    except SAXParseException:
+        traceback.print_exc()
+        return False
+    except Exception:
+        traceback.print_exc()
+        return True
+
+
 class PlanExecutor(object):
     def __init__(self, plan):
 
@@ -393,7 +334,7 @@ class PlanExecutor(object):
             stop_event = Event()
 
         if loader is None:
-            loader = get_content
+            loader = http_get
 
         def __create_graph():
             if cache is None:
@@ -418,7 +359,7 @@ class PlanExecutor(object):
                     content, headers = result
                     if not isinstance(content, Graph):
                         g = ConjunctiveGraph()
-                        g.parse(source=content, format=format)
+                        parse_rdf(g, content, format)
                     else:
                         g = content
 
@@ -470,7 +411,7 @@ class PlanExecutor(object):
                 if tg.get_context(uri):
                     return
 
-                for fmt in sorted(_accept_mimes.keys(), key=lambda x: x != self.__last_success_format):
+                for fmt in sorted(RDF_MIMES.keys(), key=lambda x: x != self.__last_success_format):
                     if treat_resource_content(fmt):
                         self.__last_success_format = fmt
                         break
@@ -602,7 +543,7 @@ class PlanExecutor(object):
                                     # If all threads are busy...I'll do it myself
                                     __follow_node(n, s, tree_graph)
 
-                                if len(threads) >= workers / 2:
+                                if len(threads) >= workers:
                                     wait(threads)
                                     [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
                                     threads = []
@@ -617,8 +558,7 @@ class PlanExecutor(object):
                 quads = set([])
                 for (tp, seed, object) in candidates:
                     quad = (tp.node, seed, tp.p, object)
-                    passing = True
-                    passing = passing and not self.__wrapper.is_filtered(seed, space, tp.s)
+                    passing = not self.__wrapper.is_filtered(seed, space, tp.s)
                     passing = passing and not self.__wrapper.is_filtered(object, space, tp.o)
                     if not passing:
                         if tp.p not in predicate_pass:
@@ -629,8 +569,8 @@ class PlanExecutor(object):
                     quads.add(quad)
 
                 if all(predicate_pass.values()):
-                    for (c, s, p, o) in quads:
-                        __put_quad_in_queue((c, s, p, o))
+                    for q in quads:
+                        __put_quad_in_queue(q)
 
             except Queue.Full:
                 stop_event.set()

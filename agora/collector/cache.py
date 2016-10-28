@@ -30,6 +30,7 @@ from threading import Thread, Lock
 from time import sleep
 
 import shortuuid
+from agora.collector.execution import parse_rdf
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
 from concurrent.futures import ThreadPoolExecutor
@@ -165,9 +166,8 @@ class RedisCache(object):
                 g = self.__resource_cache.get_context(gid)
                 if gid not in self.__uuids:
                     uuid = shortuuid.uuid()
-                    self.__uuids[gid] = uuid
-                    self.__uris[uuid] = gid
-                uuid = self.__uuids[gid]
+                else:
+                    uuid = self.__uuids[gid]
 
                 temp_key = '{}:{}'.format(self.__cache_key, uuid)
 
@@ -196,12 +196,7 @@ class RedisCache(object):
                 ttl = self.__min_cache_time
                 source, headers = response
                 if not isinstance(source, Graph):
-                    try:
-                        g.parse(source=source, format=format)
-                    except Exception as e:
-                        traceback.print_exc()
-                        log.error(e.message)
-
+                    parse_rdf(g, source, format)
                 else:
                     if g != source:
                         g.__iadd__(source)
@@ -213,12 +208,13 @@ class RedisCache(object):
 
                 # Let's create a new one
                 p.set('{}:{}:uri'.format(self.__key_prefix, uuid), gid)
-                self.__uuids[gid] = uuid
-                self.__uris[uuid] = gid
                 ttl_ts = calendar.timegm((dt.utcnow() + delta(seconds=ttl)).timetuple())
                 p.set(temp_key, ttl_ts)
                 p.expire(temp_key, ttl)
                 p.execute()
+                self.__uuids[gid] = uuid
+                self.__uris[uuid] = gid
+
                 g_copy = Graph(identifier=gid)
                 g_copy.__iadd__(g)
                 return g_copy, int(ttl)
