@@ -202,11 +202,10 @@ class Fragment(object):
             fragment.plan = Graph().parse(StringIO(plan_turtle), format='turtle')
             return fragment
         except Exception:
-            with kv.pipeline() as p:
-                with kv.pipeline() as pipe:
-                    for fragment_key in kv.keys('{}*{}*'.format(fragments_key, fid)):
-                        pipe.delete(fragment_key)
-                    pipe.execute()
+            with kv.pipeline() as pipe:
+                for fragment_key in kv.keys('{}*{}*'.format(fragments_key, fid)):
+                    pipe.delete(fragment_key)
+                pipe.execute()
 
     def save(self, pipe):
         fragment_key = '{}:{}'.format(self.__fragments_key, self.fid)
@@ -330,7 +329,8 @@ class FragmentIndex(object):
         for fragment_id in fids:
             fragment = Fragment.load(self.kv, self.triples, self.__fragments_key, fragment_id,
                                      prefixes=self.__planner.fountain.prefixes)
-            yield (fragment_id, fragment)
+            if fragment is not None:
+                yield (fragment_id, fragment)
 
     def get(self, agp, general=False):
         # type: (AGP, bool) -> dict
