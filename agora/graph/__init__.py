@@ -25,10 +25,12 @@ import rdflib
 from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
 from agora.graph.processor import extract_bgps
+from rdflib import BNode
 from rdflib import Graph
 from rdflib import Literal
 from rdflib import RDF
 from rdflib import RDFS
+from rdflib import URIRef
 from rdflib import Variable
 from rdflib import plugin
 
@@ -79,7 +81,26 @@ class AgoraGraph(Graph):
             self.bind(prefix, ns)
 
     def __build_agp(self, bgp):
-        return AGP(set([TP(s, p, o) for s, p, o in bgp]), self.__collector.prefixes)
+        def tp_part(term):
+            if isinstance(term, Variable) or isinstance(term, BNode):
+                return '?{}'.format(str(term))
+            elif isinstance(term, URIRef):
+                return '<{}>'.format(term)
+            elif isinstance(term, Literal):
+                return term.n3(namespace_manager=self.namespace_manager)
+
+        tps = set([])
+        for s, p, o in bgp:
+            s_elm = tp_part(s)
+            if p == RDF.type:
+                o_elm = self.qname(o)
+                p_elm = 'a'
+            else:
+                p_elm = self.qname(p)
+                o_elm = tp_part(o)
+
+            tps.add('{} {} {}'.format(s_elm, p_elm, o_elm))
+        return AGP(tps, self.__collector.prefixes)
 
     def gen(self, bgp):
         # type: (list) -> (Graph, iter)
