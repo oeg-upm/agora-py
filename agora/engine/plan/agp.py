@@ -165,7 +165,8 @@ class AGP(set):
                     if s in contexts[uid]:
                         context = str(uid)
 
-                self.__graph.get_context(context).add((s_node, p_node, o_node))
+                if context is not None:
+                    self.__graph.get_context(context).add((s_node, p_node, o_node))
 
         return self.__graph
 
