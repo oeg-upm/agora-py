@@ -80,7 +80,7 @@ class AgoraGraph(Graph):
         for prefix, ns in collector.prefixes.items():
             self.bind(prefix, ns)
 
-    def __build_agp(self, bgp):
+    def build_agp(self, bgp):
         def tp_part(term):
             if isinstance(term, Variable) or isinstance(term, BNode):
                 return '?{}'.format(str(term))
@@ -105,7 +105,7 @@ class AgoraGraph(Graph):
     def gen(self, bgp):
         # type: (list) -> (Graph, iter)
         if bgp not in self.__collected:
-            agp = self.__build_agp(bgp)
+            agp = self.build_agp(bgp)
             gen_dict = self.__collector.get_fragment_generator(agp)
             self.__plan = gen_dict.get('plan', None)
             return self.__plan, self._produce(gen_dict['generator'], bgp)
@@ -143,4 +143,4 @@ class AgoraGraph(Graph):
 
     def agps(self, query_object):
         for bgp in extract_bgps(query_object, prefixes=self.__collector.prefixes):
-            yield self.__build_agp(bgp.triples)
+            yield self.build_agp(bgp.triples)

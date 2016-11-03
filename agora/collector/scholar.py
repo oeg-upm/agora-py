@@ -276,10 +276,10 @@ class Fragment(object):
         n_triples = 0
         pre_time = datetime.utcnow()
         for c, s, p, o in collect_dict['generator']:
-            tp = self.__tp_map[str(c)]
-            self.stream.put(str(c), (s, p, o))
+            tp = self.__tp_map[str(c.node)]
+            self.stream.put(str(c.node), (s, p, o))
             self.triples.get_context(str((back_id, tp))).add((s, p, o))
-            self.__notify((str(c), s, p, o))
+            self.__notify((str(c.node), s, p, o))
             n_triples += 1
         with self.lock:  # Replace graph store and update ttl
             for tp in self.__tp_map.values():

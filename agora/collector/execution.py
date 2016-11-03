@@ -557,7 +557,7 @@ class PlanExecutor(object):
                 predicate_pass = {}
                 quads = set([])
                 for (tp, seed, object) in candidates:
-                    quad = (tp.node, seed, tp.p, object)
+                    quad = (tp, seed, tp.p, object)
                     passing = not self.__wrapper.is_filtered(seed, space, tp.s)
                     passing = passing and not self.__wrapper.is_filtered(object, space, tp.o)
                     if not passing:
@@ -611,7 +611,7 @@ class PlanExecutor(object):
                             if not passing:
                                 continue
 
-                            __put_quad_in_queue((tp.node, seed, RDF.type, type))
+                            __put_quad_in_queue((tp, seed, RDF.type, type))
 
                     finally:
                         __release_graph(tree_graph)
