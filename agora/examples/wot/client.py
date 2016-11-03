@@ -37,13 +37,16 @@ q4 = """SELECT ?s ?v WHERE { ?s rdfs:label "tamb" ;
                                  ] .
                               FILTER (?v > -50)}"""
 
+q5 = """SELECT (COUNT(?s) as ?cnt) WHERE { ?s rdfs:label "mag" . ?s wot:observedBy ?d }"""
+
+
 elapsed = []
 
 # fragment = agora.fragment(queries[0])
 # print fragment.serialize(format='turtle')
 # print len(fragment)
 
-for query in [q, q2, q3, q4] * 4:
+for query in [q4, q5] * 3:
     pre = datetime.now()
     # Ask agora for results of the given query,
     # evaluating candidate results for each fragment triple collected (chunk_size=1)

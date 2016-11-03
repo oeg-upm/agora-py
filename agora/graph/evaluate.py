@@ -64,6 +64,63 @@ def collect_bgp_fragment(graph, bgp):
             graph.add((s, p, o))
 
 
+def __bind(ctx, tp, ss, sp, so):
+    if ctx[tp.s] is None:
+        ctx[tp.s] = ss
+
+    try:
+        ctx[tp.p] = sp
+    except AlreadyBound:
+        pass
+
+    try:
+        if ctx[tp.o] is None:
+            ctx[tp.o] = so
+    except AlreadyBound:
+        pass
+
+    return ctx
+
+
+def __intermediate_generator(ctx, fragment):
+    plan, gen = fragment
+    for tp, ss, sp, so in gen:
+        _s = ctx[tp.s]
+        _o = ctx[tp.o]
+
+        if None in (_s, _o):
+            c = ctx.push()
+            __bind(c, tp, ss, sp, so)
+        else:
+            c = ctx
+
+        yield c, tp, ss, sp, so
+
+
+def __compose(c, tp, ss, sp, so, intermediate):
+    for qc in intermediate:
+        if c[tp.s] == qc[tp.s] or c[tp.o] == qc[tp.s]:
+            ctx = qc.push()
+            __bind(ctx, tp, ss, sp, so)
+            yield ctx
+
+
+def __expEvalBGP(gen, wire):
+    vars = set([v for v in wire.nodes() if isinstance(v, Variable)])
+    query_contexts = set([])
+    for c, tp, ss, sp, so in gen:
+        result = []
+        for inter in __compose(c, tp, ss, sp, so, query_contexts):
+            if all([c[k] for k in vars]):
+                yield c.solution()
+            else:
+                result.append(inter)
+        for r in result:
+            query_contexts.add(r)
+        query_contexts.add(c)
+
+
+
 def __evalBGP(ctx, bgp):
     """
     A basic graph pattern
@@ -107,10 +164,12 @@ def __evalBGP(ctx, bgp):
 def evalBGP(ctx, bgp):
     print 'evaluating BGP {}'.format(bgp)
 
-    collect_bgp_fragment(ctx.graph, bgp)
+    fragment_generator = ctx.graph.gen(bgp)
+    wire = ctx.graph.build_agp(bgp).wire
 
-    for x in __evalBGP(ctx, bgp):
-        yield x
+    if fragment_generator is not None:
+        for x in __expEvalBGP(__intermediate_generator(ctx, fragment_generator), wire):
+            yield x
 
 
 def evalExtend(ctx, extend):

@@ -18,13 +18,13 @@ queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor
 
 elapsed = []
 
-for agp in agora.agps(queries[0]):
-    print agp
-
-print agora.search_plan(queries[0]).serialize(format='turtle')
-
-for c, s, p, o in agora.fragment_generator(queries[0])['generator']:
-    print s, p, o
+# for agp in agora.agps(queries[0]):
+#     print agp
+#
+# print agora.search_plan(queries[0]).serialize(format='turtle')
+#
+# for c, s, p, o in agora.fragment_generator(queries[0])['generator']:
+#     print s, p, o
 
 
 for query in queries:

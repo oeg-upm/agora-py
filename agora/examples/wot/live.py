@@ -37,7 +37,7 @@ q = """SELECT DISTINCT ?id (AVG(?value) as ?avg) ?lt ?lvalue WHERE {
                                 ]
                           } GROUP BY ?id"""
 
-q2 = """SELECT (COUNT(*) as ?cnt) WHERE { ?s a wot:WebThing }"""
+q2 = """SELECT ?s WHERE { ?s a wot:WebThing }"""
 
 q3 = """SELECT (COUNT(?s) as ?cnt) WHERE { ?s rdfs:label ?l . ?s wot:observedBy ?d  FILTER(STR(?l) = "mag") }"""
 
@@ -49,9 +49,27 @@ q4 = """SELECT ?s ?v WHERE { ?s rdfs:label "tamb" ;
                                  ] .
                               FILTER (?v > -50)}"""
 
+
+q5 = """SELECT ?s ?d WHERE { ?s rdfs:label "mag" . ?s wot:observedBy ?d }"""
+
+q6 = """SELECT * WHERE { ?s a wot:WebThing ; wot:identifier ?i ; wot:encapsulatesSystem ?sys }"""
+
+q7 = """SELECT * WHERE {
+                            ?w wot:identifier "stars1" .
+                            ?w wot:hasWebThingProperty ?wp .
+                            ?wp rdfs:label "tsky" .
+                            ?wp wot:hasLatestEntry ?le .
+                            ?le wot:value ?lvalue .
+                            ?le wot:entryTimeStamp ?lt .
+                            ?wp wot:hasLog ?log .
+                            ?log wot:hasEntry ?loge .
+                            ?loge wot:value ?value .
+                          }"""
+
+
 elapsed = []
 
-for query in [q, q2, q3, q4] * 2:
+for query in [q7]:
     pre = datetime.now()
     for row in agora.query(query):
         for label in row.labels:
@@ -59,8 +77,7 @@ for query in [q, q2, q3, q4] * 2:
         print
     post = datetime.now()
     elapsed.append((post - pre).total_seconds())
-    sleep(1)
 
 print elapsed
 
-raw_input()
+# raw_input()
