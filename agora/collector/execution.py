@@ -262,6 +262,9 @@ class PlanWrapper(object):
             return True
         return False
 
+    def under_filter(self, space):
+        return any(filter(lambda x: len(x) > 0, self.__ss.filter_trees(space)))
+
 
 def parse_rdf(graph, content, format):
     try:
@@ -458,7 +461,7 @@ class PlanExecutor(object):
             fragment_queue.put(quad, timeout=queue_wait)
 
         def __follow_node(node, seed, tree_graph):
-            candidates = []
+            candidates = set([])
             try:
                 for n, n_data, e_data in self.__wrapper.successors(node):
                     expected_types = e_data.get('expectedType', None)
@@ -498,7 +501,12 @@ class PlanExecutor(object):
                                             self.__wrapper.filter(seed, space, tp.s)
                                         else:
                                             candidate = (tp, seed, object)
-                                            candidates.append(candidate)
+                                            # if self.__wrapper.under_filter(space):
+                                            candidates.add(candidate)
+                                            # else:
+                                            #     quad = (tp, seed, tp.p, object)
+                                            #     __put_quad_in_queue(quad)
+
                                 except AttributeError as e:
                                     log.warning('Trying to find {} objects of {}: {}'.format(tp.p, seed, e.message))
                             else:
@@ -516,7 +524,11 @@ class PlanExecutor(object):
                                                 put_quad = False
 
                                         if put_quad:
-                                            candidates.append((tp, seed_object, tp.o))
+                                            # if self.__wrapper.under_filter(space):
+                                            candidates.add((tp, seed_object, tp.o))
+                                            # else:
+                                            #     quad = (tp, seed, tp.p, tp.o)
+                                            #     __put_quad_in_queue(quad)
                                 except AttributeError as e:
                                     log.warning(
                                         'Trying to find {} objects of {}: {}'.format(on_property, seed, e.message))
