@@ -27,6 +27,7 @@ import re
 from agora import Agora
 from agora.collector import triplify
 from agora.engine.plan import AGP
+from agora.engine.plan.agp import TP
 from agora.server import Server, APIError, Client
 from flask import request
 
@@ -96,14 +97,16 @@ class FragmentClient(Client):
         with closing(quads_gen) as gen:
             for quad in gen:
                 quad = str(tuple(quad.split('\xc2\xb7')))
-                yield triplify(quad)
+                tp_str, s, p, o = triplify(quad)
+                yield TP.from_string(tp_str), s, p, o
 
     def agp_fragment(self, agp):
         quads_gen = self._get_request('fragment?agp=%s' % agp, accept='application/agora-quad')
         with closing(quads_gen) as gen:
             for quad in gen:
                 quad = str(tuple(quad.split('\xc2\xb7')))
-                yield triplify(quad)
+                tp_str, s, p, o = triplify(quad)
+                yield TP.from_string(tp_str), s, p, o
 
 
 def client(host='localhost', port=5000):

@@ -1,5 +1,5 @@
 from datetime import datetime
-
+import agora.examples
 from agora.client import AgoraClient
 
 __author__ = 'Fernando Serena'
@@ -9,8 +9,8 @@ agora = AgoraClient()
 # Example queries
 queries = ["""SELECT * WHERE {?s wot:value ?v ; wot:entryTimeStamp ?t }"""]
 
-q = """SELECT DISTINCT (AVG(?value) as ?avg) ?lt ?lvalue WHERE {
-                            [] wot:identifier "stars1" ;
+q = """SELECT DISTINCT ?id (AVG(?value) as ?avg) ?lt ?lvalue WHERE {
+                            [] wot:identifier ?id ;
                                wot:hasWebThingProperty [
                                    rdfs:label "tsky" ;
                                    wot:hasLatestEntry [
@@ -23,7 +23,7 @@ q = """SELECT DISTINCT (AVG(?value) as ?avg) ?lt ?lvalue WHERE {
                                         ]
                                     ]
                                 ]
-                          }"""
+                          } GROUP BY ?id"""
 
 q2 = """SELECT (COUNT(*) as ?cnt) WHERE { ?s a wot:WebThing }"""
 
@@ -35,7 +35,7 @@ q4 = """SELECT ?s ?v WHERE { ?s rdfs:label "tamb" ;
                                     wot:value ?v ;
                                     wot:entryTimeStamp ?t
                                  ] .
-                              FILTER (?v > -50)}"""
+                              FILTER (?v > 20)}"""
 
 q5 = """SELECT (COUNT(?s) as ?cnt) WHERE { ?s rdfs:label "mag" . ?s wot:observedBy ?d }"""
 
@@ -46,7 +46,7 @@ elapsed = []
 # print fragment.serialize(format='turtle')
 # print len(fragment)
 
-for query in [q4, q5] * 3:
+for query in [q]:
     pre = datetime.now()
     # Ask agora for results of the given query,
     # evaluating candidate results for each fragment triple collected (chunk_size=1)

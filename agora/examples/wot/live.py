@@ -1,12 +1,11 @@
 import logging
-
-from agora import Agora, setup_logging
-from agora.collector.cache import RedisCache
-from agora.collector.scholar import Scholar
 from datetime import datetime
 from time import sleep
 
-setup_logging(logging.DEBUG)
+from agora import Agora, setup_logging
+import agora.examples
+
+setup_logging(logging.INFO)
 
 # Agora object
 agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
@@ -41,23 +40,21 @@ q2 = """SELECT ?s WHERE { ?s a wot:WebThing }"""
 
 q3 = """SELECT (COUNT(?s) as ?cnt) WHERE { ?s rdfs:label ?l . ?s wot:observedBy ?d  FILTER(STR(?l) = "mag") }"""
 
-q4 = """SELECT ?s ?v WHERE { ?s rdfs:label "tamb" ;
+q4 = """SELECT ?s ?v ?d WHERE { ?s rdfs:label "tamb" ;
                                 <http://www.wot.org#observedBy> ?d ;
                                 wot:hasLatestEntry [
-                                    wot:value ?v ;
-                                    wot:entryTimeStamp ?t
+                                    wot:value ?v
                                  ] .
                               FILTER (?v > -50)}"""
-
 
 q5 = """SELECT ?s ?d WHERE { ?s rdfs:label "mag" . ?s wot:observedBy ?d }"""
 
 q6 = """SELECT * WHERE { ?s a wot:WebThing ; wot:identifier ?i ; wot:encapsulatesSystem ?sys }"""
 
 q7 = """SELECT * WHERE {
-                            ?w wot:identifier "stars1" .
+                            ?w wot:identifier ?id .
                             ?w wot:hasWebThingProperty ?wp .
-                            ?wp rdfs:label "tsky" .
+                            ?wp rdfs:label ?prop .
                             ?wp wot:hasLatestEntry ?le .
                             ?le wot:value ?lvalue .
                             ?le wot:entryTimeStamp ?lt .
@@ -66,15 +63,19 @@ q7 = """SELECT * WHERE {
                             ?loge wot:value ?value .
                           }"""
 
-
 elapsed = []
 
 for query in [q7]:
     pre = datetime.now()
+    n = 0
     for row in agora.query(query):
+        print '[', (datetime.now() - pre).total_seconds(), '] solution:',
         for label in row.labels:
             print label + '=' + str(row[label]),
         print
+        n += 1
+        #sleep(1)
+    print n, 'solutions'
     post = datetime.now()
     elapsed.append((post - pre).total_seconds())
 

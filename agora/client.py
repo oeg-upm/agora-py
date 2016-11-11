@@ -46,9 +46,9 @@ class AgoraClient(object):
     def planner(self):
         return self._planner
 
-    def query(self, query, chunk_size=None):
+    def query(self, query, **kwargs):
         graph = AgoraGraph(self._collector)
-        return graph.query(query, chunk_size=chunk_size)
+        return graph.query(query, **kwargs)
 
     def fragment(self, query=None, agps=None):
         if not (query or agps):

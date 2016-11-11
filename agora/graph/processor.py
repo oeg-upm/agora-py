@@ -73,15 +73,9 @@ def extract_bgps(query, prefixes):
 
 
 class FragmentProcessor(SPARQLProcessor):
-    def restore(self, query, initBindings, base):
-        def wrapper():
-            return evalQuery(self.graph, query, initBindings, base)
-
-        return wrapper
-
     def query(
             self, strOrQuery, initBindings={},
-            initNs={}, base=None, DEBUG=False, fragment_gen=None, chunk_size=None, **kwargs):
+            initNs={}, base=None, DEBUG=False, **kwargs):
         """
         Evaluate a query with the given initial bindings, and initial
         namespaces. The given base is used to resolve relative URIs in
@@ -97,5 +91,5 @@ class FragmentProcessor(SPARQLProcessor):
         log.debug(
             'Took {}ms to parse the SPARQL query: {}'.format((datetime.now() - start).total_seconds(), str(strOrQuery)))
 
-        eval = evalQuery(self.graph, query, initBindings, base)
+        eval = evalQuery(self.graph, query, initBindings, base, **kwargs)
         return eval

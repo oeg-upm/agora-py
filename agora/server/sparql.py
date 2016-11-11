@@ -20,6 +20,7 @@
 """
 import json
 import logging
+from datetime import datetime
 
 from agora import Agora
 from agora.server import Server, APIError, Client
@@ -49,7 +50,10 @@ def result(row):
     def r_dict(l):
         value = row[l]
         type = value_type(value)
-        res = {"type": type, "value": value.toPython()}
+        value_p = value.toPython()
+        if isinstance(value_p, datetime):
+            value_p = str(value_p)
+        res = {"type": type, "value": value_p}
         if type == 'literal':
             if value.datatype:
                 res['datatype'] = value.datatype.toPython()

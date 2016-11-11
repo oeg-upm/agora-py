@@ -18,6 +18,9 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+import threading
+
+from agora.graph.incremental import incremental_eval_bgp
 
 """
 These method recursively evaluate the SPARQL Algebra
@@ -47,78 +50,12 @@ from rdflib.plugins.sparql.sparql import (
     QueryContext, AlreadyBound, FrozenBindings, SPARQLError)
 
 
-def tp_part(graph, term):
-    if isinstance(term, Variable) or isinstance(term, BNode):
-        return '?{}'.format(str(term))
-    elif isinstance(term, URIRef):
-        return '<{}>'.format(term)
-    elif isinstance(term, Literal):
-        return term.n3(namespace_manager=graph.namespace_manager)
-
-
 def collect_bgp_fragment(graph, bgp):
     res = graph.gen(bgp)
     if res is not None:
         plan, gen = res
         for c, s, p, o in gen:
             graph.add((s, p, o))
-
-
-def __bind(ctx, tp, ss, sp, so):
-    if ctx[tp.s] is None:
-        ctx[tp.s] = ss
-
-    try:
-        ctx[tp.p] = sp
-    except AlreadyBound:
-        pass
-
-    try:
-        if ctx[tp.o] is None:
-            ctx[tp.o] = so
-    except AlreadyBound:
-        pass
-
-    return ctx
-
-
-def __intermediate_generator(ctx, fragment):
-    plan, gen = fragment
-    for tp, ss, sp, so in gen:
-        _s = ctx[tp.s]
-        _o = ctx[tp.o]
-
-        if None in (_s, _o):
-            c = ctx.push()
-            __bind(c, tp, ss, sp, so)
-        else:
-            c = ctx
-
-        yield c, tp, ss, sp, so
-
-
-def __compose(c, tp, ss, sp, so, intermediate):
-    for qc in intermediate:
-        if c[tp.s] == qc[tp.s] or c[tp.o] == qc[tp.s]:
-            ctx = qc.push()
-            __bind(ctx, tp, ss, sp, so)
-            yield ctx
-
-
-def __expEvalBGP(gen, wire):
-    vars = set([v for v in wire.nodes() if isinstance(v, Variable)])
-    query_contexts = set([])
-    for c, tp, ss, sp, so in gen:
-        result = []
-        for inter in __compose(c, tp, ss, sp, so, query_contexts):
-            if all([c[k] for k in vars]):
-                yield c.solution()
-            else:
-                result.append(inter)
-        for r in result:
-            query_contexts.add(r)
-        query_contexts.add(c)
-
 
 
 def __evalBGP(ctx, bgp):
@@ -164,11 +101,12 @@ def __evalBGP(ctx, bgp):
 def evalBGP(ctx, bgp):
     print 'evaluating BGP {}'.format(bgp)
 
-    fragment_generator = ctx.graph.gen(bgp)
-    wire = ctx.graph.build_agp(bgp).wire
-
-    if fragment_generator is not None:
-        for x in __expEvalBGP(__intermediate_generator(ctx, fragment_generator), wire):
+    if ctx.incremental:
+        for x in incremental_eval_bgp(ctx, bgp):
+            yield x
+    else:
+        collect_bgp_fragment(ctx.graph, bgp)
+        for x in __evalBGP(ctx, bgp):
             yield x
 
 
@@ -506,8 +444,14 @@ def evalConstructQuery(ctx, query):
     return res
 
 
-def evalQuery(graph, query, initBindings, base=None):
-    ctx = QueryContext(graph)
+class AgoraQueryContext(QueryContext):
+    def __init__(self, graph=None, bindings=None, incremental=True):
+        super(AgoraQueryContext, self).__init__(graph, bindings)
+        self.incremental = incremental
+
+
+def evalQuery(graph, query, initBindings, base=None, incremental=True):
+    ctx = AgoraQueryContext(graph=graph, incremental=incremental)
 
     ctx.prologue = query.prologue
 
