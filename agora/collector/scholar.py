@@ -226,19 +226,19 @@ class Fragment(object):
             with self.lock:
                 for c in self.__tp_map:
                     for s, p, o in self.triples.get_context(str((self.fid, self.__tp_map[c]))):
-                        yield c, s, p, o
+                        yield self.__tp_map[c], s, p, o
         else:
             try:
                 until = calendar.timegm(datetime.utcnow().timetuple())
                 listen_queue = Queue(maxsize=100)
                 self.__observers.add(listen)
-                for quad in self.stream.get(until):
-                    yield quad
+                for c, s, p, o in self.stream.get(until):
+                    yield self.__tp_map[c], s, p, o
 
                 while not self.__updated or not listen_queue.empty():
                     try:
-                        quad = listen_queue.get(timeout=0.1)
-                        yield quad
+                        c, s, p, o = listen_queue.get(timeout=0.1)
+                        yield self.__tp_map[c], s, p, o
                     except Empty:
                         pass
                     except Exception:
@@ -467,10 +467,15 @@ class Scholar(Collector):
 
         return mapped_plan
 
+    def __map_tp(self, tp, terms):
+        s, p, o = tp
+        return TP(terms.get(s, s), terms.get(p, p), terms.get(o, o))
+
     def mapped_gen(self, mapping):
         generator = mapping['fragment'].generator
+        m_terms = mapping.get('terms', {})
         for c, s, p, o in generator:
-            yield c, s, p, o
+            yield self.__map_tp(c, m_terms), s, p, o
 
     def get_fragment_generator(self, agp, **kwargs):
         mapping = self.__index.get(agp, general=True)
