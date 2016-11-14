@@ -19,6 +19,7 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 from rdflib import Variable
+from rdflib.plugins.sparql.sparql import AlreadyBound
 
 __author__ = 'Fernando Serena'
 
@@ -71,14 +72,19 @@ class ContextCollection(set):
         return False
 
 
-def __base_generator(fragment):
+def __base_generator(ctx, fragment):
     # type: (iter) -> iter
-    plan, gen = fragment
-    for tp, ss, _, so in gen:
+    for tp, ss, _, so in fragment:
         kwargs = {}
         if isinstance(tp.o, Variable):
+            ctx_o = ctx[tp.o]
+            if ctx_o is not None and so != ctx_o:
+                continue
             kwargs[tp.o] = so
         if isinstance(tp.s, Variable):
+            ctx_s = ctx[tp.s]
+            if ctx_s is not None and ss != ctx_s:
+                continue
             kwargs[tp.s] = ss
 
         if kwargs:
@@ -218,7 +224,10 @@ def __query_context(ctx, c):
     # type: (QueryContext, Context) -> QueryContext
     q = ctx.push()
     for k, v in c.map.items():
-        q[k] = v
+        try:
+            q[k] = v
+        except AlreadyBound:
+            pass
     return q
 
 
@@ -230,7 +239,7 @@ def incremental_eval_bgp(ctx, bgp):
 
         variables = set([v for v in agp.wire.nodes() if isinstance(v, Variable)])
         contexts = ContextCollection()
-        for c, tp in __base_generator(fragment_generator):
+        for c, tp in __base_generator(ctx, fragment_generator):
             for inter in __eval_delta(c, tp, contexts):
                 if inter not in contexts:
                     if all([inter[k] is not None for k in variables]):
