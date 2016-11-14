@@ -51,11 +51,13 @@ from rdflib.plugins.sparql.sparql import (
 
 
 def collect_bgp_fragment(graph, bgp):
-    res = graph.gen(bgp)
-    if res is not None:
-        plan, gen = res
-        for c, s, p, o in gen:
-            graph.add((s, p, o))
+    gen = graph.gen(bgp)
+    if gen is not None:
+        try:
+            while gen.next():
+                pass
+        except StopIteration:
+            pass
 
 
 def __evalBGP(ctx, bgp):
@@ -99,9 +101,9 @@ def __evalBGP(ctx, bgp):
 
 
 def evalBGP(ctx, bgp):
-    print 'evaluating BGP {}'.format(bgp)
+    # print 'evaluating BGP {}'.format(bgp)
 
-    if ctx.incremental:
+    if isinstance(ctx, AgoraQueryContext) and ctx.incremental:
         for x in incremental_eval_bgp(ctx, bgp):
             yield x
     else:
@@ -177,7 +179,7 @@ def evalMinus(ctx, minus):
 def evalLeftJoin(ctx, join):
     # import pdb; pdb.set_trace()
 
-    print 'evaluating left join {}'.format(join)
+    # print 'evaluating left join {}'.format(join)
 
     for a in evalPart(ctx, join.p1):
         ok = False
@@ -448,6 +450,16 @@ class AgoraQueryContext(QueryContext):
     def __init__(self, graph=None, bindings=None, incremental=True):
         super(AgoraQueryContext, self).__init__(graph, bindings)
         self.incremental = incremental
+
+    def clone(self, bindings=None):
+        r = AgoraQueryContext(
+            self._dataset if self._dataset is not None else self.graph)
+        r.incremental = self.incremental
+        r.prologue = self.prologue
+        r.bindings.update(bindings or self.bindings)
+        r.graph = self.graph
+        r.bnodes = self.bnodes
+        return r
 
 
 def evalQuery(graph, query, initBindings, base=None, incremental=True):
