@@ -90,8 +90,8 @@ def build(agora, server=None, import_name=__name__, query_function=None):
 
         try:
             query = request.args.get('query')
-            chunk_size = request.args.get('chunk', None)
-            gen = query_function(query, chunk_size=chunk_size)
+            incremental = json.loads(request.args.get('incremental', 'true'))
+            gen = query_function(query, incremental=incremental)
             return gen_results()
         except Exception, e:
             raise APIError(e.message)
