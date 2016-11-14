@@ -72,9 +72,16 @@ class ContextCollection(set):
         return False
 
 
-def __base_generator(ctx, fragment):
-    # type: (iter) -> iter
+def __base_generator(agp, ctx, fragment):
+    # type: (AGP, AgoraContext, iter) -> iter
+    tp_single_vars = [(tp, tp.s if isinstance(tp.s, Variable) else tp.o) for tp in agp if
+                      isinstance(tp.s, Variable) != isinstance(tp.o, Variable)]
+
+    wire = agp.wire
+    ignore_tps = [str(tp) for (tp, v) in tp_single_vars if len(wire.neighbors(v)) > 1]
     for tp, ss, _, so in fragment:
+        if str(tp) in ignore_tps:
+            continue
         kwargs = {}
         if isinstance(tp.o, Variable):
             ctx_o = ctx[tp.o]
@@ -183,7 +190,7 @@ def __joins_with(tp, c, x):
     # type: (TP, Context, Context) -> bool
     any = False
     len_c = len(c.variables)
-    if len_c > 1:
+    if len_c > 1 and len(x.variables) > 1:
         if len_c - len(c.variables.intersection(x.variables)) == 1:
             if tp.s in x.variables:
                 any = True
@@ -239,7 +246,7 @@ def incremental_eval_bgp(ctx, bgp):
 
         variables = set([v for v in agp.wire.nodes() if isinstance(v, Variable)])
         contexts = ContextCollection()
-        for c, tp in __base_generator(ctx, fragment_generator):
+        for c, tp in __base_generator(agp, ctx, fragment_generator):
             for inter in __eval_delta(c, tp, contexts):
                 if inter not in contexts:
                     if all([inter[k] is not None for k in variables]):
