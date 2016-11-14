@@ -34,7 +34,7 @@ from rdflib import ConjunctiveGraph
 __author__ = 'Fernando Serena'
 
 # Setup logging level for Agora
-setup_logging(logging.DEBUG)
+setup_logging(logging.INFO)
 
 # Agora object
 agora = Agora(persist_mode=True, redis_file='store/fountain.db')
@@ -54,19 +54,23 @@ for film in load_films_from_dbpedia():
         pass
 
 # Example queries
-# queries = ["""SELECT DISTINCT ?name WHERE {?film foaf:name ?name .
-#                                            ?film dbpedia-owl:starring ?actor .
-#                                            OPTIONAL {?actor dbp:birthName "Mary Cathleen Collins"@en }
+queries = ["""SELECT * WHERE {?film foaf:name ?name .
+                                           ?film dbpedia-owl:starring ?actor .
+                                           OPTIONAL {?actor dbp:birthName ?birth }
+                                          }"""]
+
+# queries = ["""SELECT * WHERE {?film foaf:name ?name .
+#                                            ?film dbpedia-owl:starring ?actor
 #                                           }"""]
 
 # queries = ["""SELECT * WHERE {?film foaf:name ?name .
 #                                            ?film dbpedia-owl:starring ?actor
 #                                           }"""]
 
-queries = ["""SELECT DISTINCT ?actor WHERE { ?film foaf:name "10"@en .
-                                             ?film dbpedia-owl:starring ?actor .
-                                             ?actor dbp:birthName "Mary Cathleen Collins"@en
-                                          }"""]
+# queries = ["""SELECT DISTINCT ?actor WHERE { ?film foaf:name "10"@en .
+#                                              ?film dbpedia-owl:starring ?actor .
+#                                              ?actor dbp:birthName "Mary Cathleen Collins"@en
+#                                           }"""]
 
 # queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor ;
 #                                  dbp:birthName ?name .
@@ -86,8 +90,15 @@ for query in queries:
 # Ask agora for results of the given query,
 # evaluating candidate results for each fragment triple collected (chunk_size=1)
 # -> Removing chunk_size argument forces to wait until all relevant triples are collected
+    n = 0
     for row in agora.query(query):
-        print row.asdict()
+        print '[', (datetime.now() - pre).total_seconds(), '] solution:',
+        for label in row.labels:
+            if row[label] is not None:
+                print label + '=' + (row[label]).toPython(),
+        print
+        n += 1
+    print n, 'solutions'
     post = datetime.now()
     elapsed.append((post - pre).total_seconds())
 

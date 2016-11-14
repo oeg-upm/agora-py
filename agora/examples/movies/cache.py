@@ -54,47 +54,47 @@ for film in load_films_from_dbpedia():
         pass
 
 # Example queries
-# queries = ["""SELECT DISTINCT ?name WHERE { ?film a dbpedia-owl:Film .
-#                                                    ?film foaf:name ?name .
-#                                                    ?film dbpedia-owl:starring ?actor .
-#                                                    OPTIONAL {?actor dbp:birthName "Mary Cathleen Collins"@en }
-#                                                  }"""]
 
-#
-# queries = ["""SELECT DISTINCT ?film WHERE { { ?film a dbpedia-owl:Film }
-#                                             MINUS
-#                                             { ?film foaf:name ?name }
-#                                            }"""]
+# Example queries
+queries = ["""SELECT * WHERE {?film foaf:name ?name .
+                                           ?film dbpedia-owl:starring ?actor .
+                                           OPTIONAL {?actor dbp:birthName ?birth }
+                                          }"""]
 
-# queries = ["""SELECT * WHERE { ?film foaf:name ?name .
-#                                ?film dbpedia-owl:starring ?actor
-#                              }"""]
+# queries = ["""SELECT * WHERE {?film foaf:name ?name .
+#                                            ?film dbpedia-owl:starring ?actor
+#                                           }"""]
 
-# queries = ["""SELECT * WHERE { ?actor dbp:birthName "Mary Cathleen Collins"@en }"""]
+# queries = ["""SELECT * WHERE {?film foaf:name ?name .
+#                                            ?film dbpedia-owl:starring ?actor
+#                                           }"""]
 
-# queries = ["""SELECT * WHERE {?film a dbpedia-owl:Film . ?film foaf:name ?name }"""]
+# queries = ["""SELECT DISTINCT ?actor WHERE { ?film foaf:name "10"@en .
+#                                              ?film dbpedia-owl:starring ?actor .
+#                                              ?actor dbp:birthName "Mary Cathleen Collins"@en
+#                                           }"""]
 
-queries = ["""SELECT ?name WHERE { ?actor dbp:birthName ?name }"""]
-
+# queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor ;
+#                                  dbp:birthName ?name .
+#                               }"""]
 
 elapsed = []
 
-for t in agora.fragment_generator(queries[0], cache=cache)['generator']:
-    print t
+for query in queries:
+    pre = datetime.now()
+# Ask agora for results of the given query,
+# evaluating candidate results for each fragment triple collected (chunk_size=1)
+# -> Removing chunk_size argument forces to wait until all relevant triples are collected
+    n = 0
+    for row in agora.query(query, cache=cache):
+        print '[', (datetime.now() - pre).total_seconds(), '] solution:',
+        for label in row.labels:
+            if row[label] is not None:
+                print label + '=' + (row[label]).toPython(),
+        print
+        n += 1
+    print n, 'solutions'
+    post = datetime.now()
+    elapsed.append((post - pre).total_seconds())
 
-
-for row in agora.fragment(queries[0], cache=cache).query(queries[0]):
-    print row.asdict()
-
-
-# for query in queries:
-#     pre = datetime.now()
-    # Ask agora for results of the given query,
-    # evaluating candidate results for each fragment triple collected (chunk_size=1)
-    # -> Removing chunk_size argument forces to wait until all relevant triples are collected
-    # for row in agora.query(query, cache=cache):
-    #     print row.asdict()
-    # post = datetime.now()
-    # elapsed.append((post - pre).total_seconds())
-#
-# print elapsed
+print elapsed
