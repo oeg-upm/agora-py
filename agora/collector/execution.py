@@ -160,6 +160,13 @@ class TPWrapper(object):
     def check(self):
         return self.__check
 
+    def __repr__(self):
+        def elm_to_string(elm):
+            return elm.n3()
+
+        strings = map(elm_to_string, [self.s, self.p, self.o])
+        return '{} {} {}'.format(*strings)
+
 
 class SSWrapper(object):
     def __init__(self, plan):
@@ -614,9 +621,27 @@ class PlanExecutor(object):
                         for tp in [tp for tp in tree_patterns if tp.p == RDF.type]:
                             [root_type_candidates.add((tp, seed, tp.o)) for seed in seeds]
 
+                        threads = []
                         for seed in seeds:
-                            futures.append(pool.submit(__follow_node, tree, seed, tree_graph))
-                        wait(futures)
+                            try:
+                                workers_queue.put_nowait(seed)
+                                future = pool.submit(__follow_node, tree, seed, tree_graph)
+                                threads.append(future)
+                            except Queue.Full:
+                                # If all threads are busy...I'll do it myself
+                                __follow_node(tree, seed, tree_graph)
+
+                            if len(threads) >= workers:
+                                wait(threads)
+                                [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                                threads = []
+
+                        wait(threads)
+                        [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+
+                        # for seed in seeds:
+                        #     futures.append(pool.submit(__follow_node, tree, seed, tree_graph))
+                        # wait(futures)
 
                         for (tp, seed, type) in root_type_candidates:
                             passing = not self.__wrapper.is_filtered(seed, tp.defined_by, tp.s)
