@@ -62,9 +62,9 @@ class Agora(object):
             collector.loader = loader
         return AgoraGraph(collector)
 
-    def query(self, query, collector=None, cache=None, chunk_size=None, loader=None):
+    def query(self, query, collector=None, cache=None, loader=None, **kwargs):
         graph = self.__get_agora_graph(collector, cache, loader)
-        return graph.query(query, chunk_size=chunk_size)
+        return graph.query(query, **kwargs)
 
     def fragment(self, query=None, agps=None, collector=None, cache=None, loader=None):
         if not (query or agps):
