@@ -26,6 +26,7 @@ from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
 from agora.graph.processor import extract_bgps
 from rdflib import BNode
+from rdflib import ConjunctiveGraph
 from rdflib import Graph
 from rdflib import Literal
 from rdflib import RDF
@@ -71,12 +72,11 @@ def extract_tps_from_plan(plan):
             plan.subjects(RDF.type, AGORA.TriplePattern)}
 
 
-class AgoraGraph(Graph):
+class AgoraGraph(ConjunctiveGraph):
     def __init__(self, collector):
         super(AgoraGraph, self).__init__()
         self.__collector = collector
-        self.__plan = None
-        self.__collected = []
+        self.__collected = {}
         for prefix, ns in collector.prefixes.items():
             self.bind(prefix, ns)
 
@@ -104,19 +104,32 @@ class AgoraGraph(Graph):
 
     def gen(self, bgp):
         # type: (list) -> (Graph, iter)
+        bgp = frozenset(bgp)
         if bgp not in self.__collected:
             agp = self.build_agp(bgp)
             gen_dict = self.__collector.get_fragment_generator(agp)
-            self.__plan = gen_dict.get('plan', None)
-            return self.__plan, self._produce(gen_dict['generator'], bgp)
+            return self._produce(gen_dict, bgp)
+        else:
+            return self._read(bgp)
+
+    def _read(self, bgp):
+        for c, tp in self.__collected[bgp]['contexts'].values():
+            for s, p, o in self.get_context(c):
+                yield tp, s, p, o
 
     def _produce(self, gen, bgp):
-        for context, s, p, o in gen:
+        contexts = {}
+        for context, s, p, o in gen['generator']:
             log.debug('Got triple: {} {} {} .'.format(s.encode('utf8', 'replace'), p.encode('utf8', 'replace'),
                                                       o.encode('utf8', 'replace')))
+            context_id = str(context)
+            if context_id not in contexts:
+                contexts[context_id] = (BNode(context_id), context)
+            blank_context = contexts.get(context_id)[0]
+            self.get_context(blank_context).add((s, p, o))
             yield context, s, p, o
 
-        self.__collected.append(bgp)
+        self.__collected[bgp] = {'plan': gen['plan'], 'contexts': contexts}
 
     @property
     def collected(self):
