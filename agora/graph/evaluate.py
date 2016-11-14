@@ -18,7 +18,6 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
-import threading
 
 from agora.graph.incremental import incremental_eval_bgp
 
