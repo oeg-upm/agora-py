@@ -162,12 +162,10 @@ def __select_candidates(c, col):
     return set(candidates)
 
 
-def __exploit_collection(col, delta=None, pairs=None):
-    # type: (ContextCollection, ContextCollection, set) -> iter
-    if pairs is None:
-        pairs = set([])
-    if delta is None:
-        delta = ContextCollection()
+def __exploit_collection(col):
+    # type: (set, ContextCollection, set) -> iter
+    pairs = set([])
+    delta = ContextCollection()
     acum = ContextCollection()
     for r in col:
         candidates = set(__select_candidates(r, acum))
@@ -221,7 +219,9 @@ def __eval_delta(c, tp, intermediate):
     if isinstance(tp.o, Variable) and isinstance(tp.s, Variable):
         candidates = filter(lambda x: __joins_with(tp, c, x), intermediate)
         reduce_candidates = set(__reduce_collection(candidates))
-        for r in __exploit_collection(__compose(c, reduce_candidates)):
+        compose = set(__compose(c, reduce_candidates))
+        exploit = list(__exploit_collection(compose))
+        for r in exploit:
             yield r
 
     yield c
@@ -240,7 +240,7 @@ def __query_context(ctx, c):
 
 def incremental_eval_bgp(ctx, bgp):
     # type: (QueryContext, iter) -> iter
-    fragment_generator = ctx.graph.gen(bgp)
+    fragment_generator = ctx.graph.gen(bgp, filters=ctx.filters)
     if fragment_generator is not None:
         agp = ctx.graph.build_agp(bgp)
 
