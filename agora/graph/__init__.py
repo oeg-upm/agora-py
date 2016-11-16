@@ -102,12 +102,12 @@ class AgoraGraph(ConjunctiveGraph):
             tps.add('{} {} {}'.format(s_elm, p_elm, o_elm))
         return AGP(tps, self.__collector.prefixes)
 
-    def gen(self, bgp):
+    def gen(self, bgp, filters=None):
         # type: (list) -> (Graph, iter)
         bgp = frozenset(bgp)
         if bgp not in self.__collected:
             agp = self.build_agp(bgp)
-            gen_dict = self.__collector.get_fragment_generator(agp)
+            gen_dict = self.__collector.get_fragment_generator(agp, filters=filters)
             return self._produce(gen_dict, bgp)
         else:
             return self._read(bgp)
