@@ -18,7 +18,6 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
-
 from agora.graph.incremental import incremental_eval_bgp
 
 """
@@ -44,7 +43,7 @@ from rdflib.plugins.sparql import CUSTOM_EVALS
 from rdflib.plugins.sparql.aggregates import evalAgg
 from rdflib.plugins.sparql.evalutils import (
     _eval, _join, _minus, _fillTemplate, _ebv)
-from rdflib.plugins.sparql.parserutils import value
+from rdflib.plugins.sparql.parserutils import value, Expr
 from rdflib.plugins.sparql.sparql import (
     QueryContext, AlreadyBound, FrozenBindings, SPARQLError)
 
@@ -178,8 +177,6 @@ def evalMinus(ctx, minus):
 def evalLeftJoin(ctx, join):
     # import pdb; pdb.set_trace()
 
-    # print 'evaluating left join {}'.format(join)
-
     for a in evalPart(ctx, join.p1):
         ok = False
         c = ctx.thaw(a)
@@ -198,8 +195,70 @@ def evalLeftJoin(ctx, join):
                 yield a
 
 
+__sparql_op_symbols = {
+    'ConditionalAndExpression': '&&',
+    'ConditionalOrExpression': '||',
+    'UnaryNot': '!',
+    'UnaryMinus': '-',
+    'UnaryPlus': '+'
+}
+
+
+def __serialize_expr(expr, context=None):
+    if isinstance(expr, Expr):
+        if not expr._vars:
+            return expr.eval()
+        else:
+            if 'Builtin_' in expr.name:
+                return '{}({})'.format(expr.name.replace('Builtin_', ''), expr.arg.n3())
+            expr_str = __serialize_expr(expr.expr, expr.name)
+
+            if 'Unary' in expr.name:
+                return '{}{}'.format(__sparql_op_symbols[expr.name], expr_str)
+
+            other_str = __serialize_expr(expr['other'], expr.name)
+            if expr.name in __sparql_op_symbols:
+                op_str = __sparql_op_symbols[expr.name]
+            else:
+                op_str = expr['op']
+            return '{} {} {}'.format(expr_str, op_str, other_str)
+    elif isinstance(expr, list):
+        return __sparql_op_symbols[context].join(map(lambda x: __serialize_expr(x, expr.name), expr))
+    else:
+        if isinstance(expr, Variable):
+            return expr.n3()
+
+        return expr.n3()
+
+
+def __serialize_filter(f):
+    return '{}'.format(__serialize_expr(f))
+
+
+def __discriminate_filters(expr):
+    if isinstance(expr, Expr):
+        n = len(expr._vars)
+        if n == 1:
+            for v in expr._vars:
+                f_str = __serialize_filter(expr)
+                yield v, f_str
+        elif n > 1 and expr.get('op', None) and expr.name == 'ConditionalAndExpression':
+            for f in __discriminate_filters(expr.expr):
+                yield f
+            for e in expr['other']:
+                for f in __discriminate_filters(e):
+                    yield f
+    elif isinstance(expr, Variable):
+        yield expr, __serialize_filter(expr)
+
+
 def evalFilter(ctx, part):
     # TODO: Deal with dict returned from evalPart!
+    for v, f in __discriminate_filters(part.expr):
+        if v not in ctx.filters:
+            ctx.filters[v] = set([])
+        ctx.filters[v].add(f)
+
     for c in evalPart(ctx, part.p):
         if _ebv(part.expr, c.forget(ctx)):
             yield c
@@ -449,6 +508,7 @@ class AgoraQueryContext(QueryContext):
     def __init__(self, graph=None, bindings=None, incremental=True):
         super(AgoraQueryContext, self).__init__(graph, bindings)
         self.incremental = incremental
+        self.filters = {}
 
     def clone(self, bindings=None):
         r = AgoraQueryContext(
