@@ -37,9 +37,11 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
 from rdflib import ConjunctiveGraph, RDF, URIRef
 from rdflib import Graph
-from rdflib import Literal
 from rdflib import RDFS
 from rdflib import Variable
+from rdflib.plugins.sparql.algebra import translateQuery
+from rdflib.plugins.sparql.parser import expandUnicodeEscapes, Query, Filter
+from rdflib.plugins.sparql.sparql import QueryContext
 
 pool = ThreadPoolExecutor(max_workers=multiprocessing.cpu_count())
 
@@ -57,6 +59,10 @@ class FilterTree(set):
         super(FilterTree, self).__init__()
         self.variables = set([])
         self.__lock = Lock()
+        self.graph = nx.DiGraph()
+
+    def add_tp(self, tp):
+        self.graph.add_edge(tp.s, tp.o)
 
     def add_variable(self, v):
         self.variables.add(v)
@@ -190,17 +196,18 @@ class SSWrapper(object):
             self.__spaces[space].add(tp)
             self.__pattern_space[tp_wrapper] = space
 
-            if not isinstance(tp_wrapper.o, Variable):
+            if not isinstance(tp_wrapper.o, Variable) or not isinstance(tp_wrapper.s, Variable):
                 filter_roots.add(tp_wrapper)
 
         for root_tp in filter_roots:
             filter_tree = FilterTree()
             self.__filter_trees[root_tp.defined_by].append(filter_tree)
             self.__build_filter_tree(filter_tree, root_tp)
+            filter_tree.add_variable(root_tp.o)
 
     def __build_filter_tree(self, fp, tp):
         if isinstance(tp.s, Variable):
-            fp.add_variable(tp.s)
+            fp.add_tp(tp)
             next_tps = list(self.__plan.subjects(AGORA.object, tp.subject_node))
             for tp_node in next_tps:
                 tp = self.patterns[tp_node]
@@ -221,6 +228,17 @@ class SSWrapper(object):
     def filter_trees(self, space):
         return self.__filter_trees[space]
 
+    def filtered_vars(self, space):
+        return reduce(lambda x, y: x.union(y.variables), self.__filter_trees[space], set([]))
+
+    def filter_var(self, tp, v):
+        if tp.defined_by not in self.__filter_trees or not self.__filter_trees[tp.defined_by]:
+            ft = FilterTree()
+            self.__filter_trees[tp.defined_by] = [ft]
+        for ft in self.__filter_trees[tp.defined_by]:
+            self.__build_filter_tree(ft, tp)
+            ft.add_variable(v)
+
 
 class PlanWrapper(object):
     def __init__(self, plan):
@@ -235,6 +253,10 @@ class PlanWrapper(object):
     def roots(self):
         return [(node, data) for (node, data) in self.__graph.nodes(data=True) if not self.__graph.predecessors(node)]
 
+    @property
+    def patterns(self):
+        return self.__ss.patterns.values()
+
     def successors(self, node):
         # type: (BNode) -> iter
 
@@ -242,15 +264,29 @@ class PlanWrapper(object):
             weight = 2
             if edge_data.get('onProperty', None) is not None:
                 weight = 1
-            for tp in n_data.get('byPattern', []):
-                if isinstance(tp.o, Literal):
-                    weight = 0
-                    break
+            aggr_dist = 1000
+            patterns = n_data.get('byPattern', [])
+            if patterns:
+                weight = -aggr_dist
+                for tp in patterns:
+                    filtered_vars = list(self.__ss.filtered_vars(tp.defined_by))
+                    for ft in self.__ss.filter_trees(tp.defined_by):
+                        if tp.o in ft.graph:
+                            for v in filtered_vars:
+                                try:
+                                    dist = nx.shortest_path(ft.graph, tp.o, v)
+                                    aggr_dist = min(aggr_dist, len(dist))
+                                except nx.NetworkXNoPath:
+                                    pass
+                    weight += aggr_dist
+
             return weight
 
         suc = [(suc, self.__graph.get_node_data(suc), self.__graph.get_edge_data(node, suc)) for suc in
                self.__graph.successors(node)]
-        return sorted(suc, key=lambda x: filter_weight(x))
+        sorted_suc = sorted(suc, key=lambda x: filter_weight(x))
+
+        return sorted_suc
 
     def filter(self, resource, space, variable):
         for f in self.__ss.filter_trees(space):
@@ -271,6 +307,9 @@ class PlanWrapper(object):
 
     def under_filter(self, space):
         return any(filter(lambda x: len(x) > 0, self.__ss.filter_trees(space)))
+
+    def filter_var(self, tp, v):
+        self.__ss.filter_var(tp, v)
 
 
 def parse_rdf(graph, content, format):
@@ -332,7 +371,7 @@ class PlanExecutor(object):
         return graph
 
     def get_fragment_generator(self, workers=None, stop_event=None, queue_wait=None, queue_size=100, cache=None,
-                               loader=None):
+                               loader=None, filters=None):
 
         if workers is None:
             workers = multiprocessing.cpu_count()
@@ -467,8 +506,14 @@ class PlanExecutor(object):
                 stop_event.set()
             fragment_queue.put(quad, timeout=queue_wait)
 
+        def __tp_weight(x):
+            weight = int(x.s in var_filters) + int(x.o in var_filters)
+            return weight
+
         def __follow_node(node, seed, tree_graph):
             candidates = set([])
+            quads = set([])
+            predicate_pass = {}
             try:
                 for n, n_data, e_data in self.__wrapper.successors(node):
                     expected_types = e_data.get('expectedType', None)
@@ -477,7 +522,7 @@ class PlanExecutor(object):
 
                     seed_variables = set([])
                     for space in n_data['spaces']:
-                        for tp in patterns:
+                        for tp in sorted(patterns, key=lambda x: __tp_weight(x), reverse=True):
                             seed_variables.add(tp.s)
 
                             if space != tp.defined_by:
@@ -487,7 +532,18 @@ class PlanExecutor(object):
                                 continue
 
                             if isinstance(tp.s, URIRef) and seed != tp.s:
+                                self.__wrapper.filter(seed, space, tp.s)
                                 continue
+                            else:  # tp.s is a Variable
+                                if tp.s in var_filters:
+                                    for var_f in var_filters[tp.s]:
+                                        context = QueryContext()
+                                        context[tp.o] = seed
+                                        passing = var_f.expr.eval(context) if hasattr(var_f.expr, 'eval') else bool(
+                                            seed.toPython())
+                                        if not passing:
+                                            self.__wrapper.filter(seed, space, tp.s)
+                                            continue
 
                             if tp.p != RDF.type:
                                 try:
@@ -504,15 +560,26 @@ class PlanExecutor(object):
                                     for object in sobs:
                                         __check_stop()
 
-                                        if not isinstance(tp.o, Variable) and object.n3() != tp.o.n3():
-                                            self.__wrapper.filter(seed, space, tp.s)
+                                        filtered = False
+                                        if not isinstance(tp.o, Variable):
+                                            if object.n3() != tp.o.n3():
+                                                self.__wrapper.filter(seed, space, tp.s)
+                                                filtered = True
                                         else:
+                                            if tp.o in var_filters:
+                                                for var_f in var_filters[tp.o]:
+                                                    context = QueryContext()
+                                                    context[tp.o] = object
+                                                    passing = var_f.expr.eval(context) if hasattr(var_f.expr,
+                                                                                                  'eval') else bool(
+                                                        object.toPython())
+                                                    if not passing:
+                                                        self.__wrapper.filter(seed, space, tp.s)
+                                                        filtered = True
+
+                                        if not filtered:
                                             candidate = (tp, seed, object)
-                                            # if self.__wrapper.under_filter(space):
                                             candidates.add(candidate)
-                                            # else:
-                                            #     quad = (tp, seed, tp.p, object)
-                                            #     __put_quad_in_queue(quad)
 
                                 except AttributeError as e:
                                     log.warning('Trying to find {} objects of {}: {}'.format(tp.p, seed, e.message))
@@ -531,11 +598,7 @@ class PlanExecutor(object):
                                                 put_quad = False
 
                                         if put_quad:
-                                            # if self.__wrapper.under_filter(space):
                                             candidates.add((tp, seed_object, tp.o))
-                                            # else:
-                                            #     quad = (tp, seed, tp.p, tp.o)
-                                            #     __put_quad_in_queue(quad)
                                 except AttributeError as e:
                                     log.warning(
                                         'Trying to find {} objects of {}: {}'.format(on_property, seed, e.message))
@@ -573,23 +636,27 @@ class PlanExecutor(object):
                         except (IndexError, KeyError):
                             traceback.print_exc()
 
-                predicate_pass = {}
-                quads = set([])
-                for (tp, seed, object) in candidates:
-                    quad = (tp, seed, tp.p, object)
-                    passing = not self.__wrapper.is_filtered(seed, space, tp.s)
-                    passing = passing and not self.__wrapper.is_filtered(object, space, tp.o)
-                    if not passing:
-                        if tp.p not in predicate_pass:
-                            predicate_pass[tp.p] = False
-                        continue
+                    for (tp, seed, object) in candidates:
+                        quad = (tp, seed, tp.p, object)
+                        passing = not self.__wrapper.is_filtered(seed, space, tp.s)
+                        passing = passing and not self.__wrapper.is_filtered(object, space, tp.o)
+                        if not passing:
+                            if tp.p not in predicate_pass:
+                                predicate_pass[tp.p] = False
+                            continue
 
-                    predicate_pass[tp.p] = True
-                    quads.add(quad)
+                        predicate_pass[tp.p] = True
+                        quads.add(quad)
 
-                if all(predicate_pass.values()):
-                    for q in quads:
-                        __put_quad_in_queue(q)
+                    candidates.clear()
+
+                    if all(predicate_pass.values()):
+                        for q in quads:
+                            __put_quad_in_queue(q)
+                        quads.clear()
+                    else:
+                        break
+
 
             except Queue.Full:
                 stop_event.set()
@@ -604,8 +671,6 @@ class PlanExecutor(object):
             """
 
             def execute_plan():
-                futures = []
-
                 for tree, data in self.__wrapper.roots:
                     # Prepare an dedicated graph for the current tree and a set of type triples (?s a Concept)
                     # to be evaluated retrospectively
@@ -639,10 +704,6 @@ class PlanExecutor(object):
                         wait(threads)
                         [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
 
-                        # for seed in seeds:
-                        #     futures.append(pool.submit(__follow_node, tree, seed, tree_graph))
-                        # wait(futures)
-
                         for (tp, seed, type) in root_type_candidates:
                             passing = not self.__wrapper.is_filtered(seed, tp.defined_by, tp.s)
                             if not passing:
@@ -671,6 +732,18 @@ class PlanExecutor(object):
                         break
                 self.__last_iteration_ts = dt.now()
             thread.join()
+
+        var_filters = {}
+        if filters:
+            for v in filters:
+                var_filters[v] = []
+                for f in filters[v]:
+                    f = 'SELECT * WHERE { FILTER (%s) }' % f
+                    parse = Query.parseString(expandUnicodeEscapes(f), parseAll=True)
+                    query = translateQuery(parse)
+                    var_filters[v].append(query.algebra.p.p)
+                for tp in filter(lambda x: x.s == v or x.o == v, self.__wrapper.patterns):
+                    self.__wrapper.filter_var(tp, v)
 
         return {'generator': get_fragment_triples(), 'prefixes': self.__plan.namespaces(),
                 'plan': self.__plan}
