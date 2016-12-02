@@ -1,0 +1,22 @@
+<div style="height:100%; padding-top:52px; padding-left: 5px; padding-right: 5px">
+    <h4 class="title">Query text</h4>
+    <div style="width: 100%">
+        <textarea type="text" class="form-control" placeholder="Query" ng-model="query"></textarea>
+        <button class="btn btn-default" type="button" ng-click="request()" style="margin-top:5px">Run query</button>
+        <button class="btn btn-default" type="button" ng-click="fragment()" style="margin-top:5px">Get fragment</button>
+    </div>
+    <div ng-show="solutions == true">
+        <h4 class="title">Query results</h4>
+        <div style="width: 100%">
+            <div id="result"></div>
+        </div>
+    </div>
+    <div ng-show="triples != undefined">
+        <h4 class="title">Fragment triples</h4>
+        {% raw %}
+        <div ng-repeat="triple in triples">
+            <p class="triple">{{triple[0]}} {{triple[1]}} {{triple[2]}} .</p>
+        </div>
+        {% endraw %}
+    </div>
+</div>

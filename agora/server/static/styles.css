@@ -1,0 +1,25 @@
+table {
+    margin: 0;
+}
+
+th {
+    background: #eeeeee;
+}
+
+th:first-letter {
+    text-transform: capitalize;
+}
+
+.form-control {
+    font-family: 'Consolas', 'Deja Vu Sans Mono', 'Bitstream Vera Sans Mono', monospace;
+}
+
+.title {
+    font-family: "Roboto Light", serif;
+    margin-top: 20px;
+}
+
+.triple {
+    font-family: 'Consolas', 'Deja Vu Sans Mono', 'Bitstream Vera Sans Mono', monospace;
+    margin-bottom: 2px;
+}

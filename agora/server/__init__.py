@@ -20,6 +20,7 @@
 """
 import json
 import logging
+import os
 import urlparse
 from functools import wraps
 from urllib import urlencode
@@ -73,7 +74,10 @@ def handle_invalid_usage(error):
 
 class Server(Flask):
     def __init__(self, import_name):
-        super(Server, self).__init__(import_name)
+        base = os.path.dirname(os.path.realpath(__file__))
+        t_folder = base + '/templates'
+        s_folder = base + '/static'
+        super(Server, self).__init__(import_name, template_folder=t_folder, static_folder=s_folder)
         self.errorhandler(APIError)(handle_invalid_usage)
 
     def response(self, rv, content_type=JSON, status=200):

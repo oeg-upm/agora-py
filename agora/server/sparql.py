@@ -22,6 +22,9 @@ import json
 import logging
 from datetime import datetime
 
+from flask import redirect
+from flask import render_template
+
 from agora import Agora
 from agora.server import Server, APIError, Client
 from flask import request
@@ -86,6 +89,8 @@ def build(agora, server=None, import_name=__name__, query_function=None):
                 yield '      {}'.format(json.dumps(result(row)).encode('utf-8'))
             if not first:
                 yield '\n    ]\n  }\n'
+            else:
+                yield '  "head": [],\n  "results": {\n    "bindings": []\n  }\n'
             yield '}'
 
         try:
@@ -95,6 +100,17 @@ def build(agora, server=None, import_name=__name__, query_function=None):
             return gen_results()
         except Exception, e:
             raise APIError(e.message)
+
+    @server.route('/')
+    def index():
+        return render_template('base.html')
+
+    @server.route('/<tmpl>')
+    def map(tmpl):
+        try:
+            return render_template(tmpl)
+        except Exception:
+            return redirect('/')
 
     return server
 
