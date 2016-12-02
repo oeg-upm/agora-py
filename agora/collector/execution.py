@@ -31,6 +31,8 @@ from threading import RLock, Thread, Event, Lock
 from xml.sax import SAXParseException
 
 import networkx as nx
+from rdflib import BNode
+
 from agora.collector.http import get_resource_ttl, RDF_MIMES, http_get
 from agora.engine.plan.graph import AGORA
 from concurrent.futures import ThreadPoolExecutor
@@ -81,7 +83,6 @@ class FilterTree(set):
 
 class PlanGraph(nx.DiGraph):
     def __init__(self, plan, ss):
-        # type: (Graph, SSWrapper) -> PlanGraph
         super(PlanGraph, self).__init__()
         self.__data = {}
 
@@ -126,7 +127,6 @@ class PlanGraph(nx.DiGraph):
 
 class TPWrapper(object):
     def __init__(self, plan, node):
-        # type: (Graph, object) -> TPWrapper
         self.__defined_by = list(plan.subjects(AGORA.definedBy, node)).pop()
         self.__node = node
 
@@ -176,7 +176,6 @@ class TPWrapper(object):
 
 class SSWrapper(object):
     def __init__(self, plan):
-        # type: (Graph) -> SSWrapper
         self.__plan = plan
         self.__spaces = {}
         self.__nodes = {}
@@ -379,6 +378,8 @@ class PlanExecutor(object):
         fragment_queue = Queue.Queue(maxsize=queue_size)
         workers_queue = Queue.Queue(maxsize=workers)
 
+        fragment = set([])
+
         if stop_event is None:
             stop_event = Event()
 
@@ -504,7 +505,9 @@ class PlanExecutor(object):
             if (dt.now() - self.__last_iteration_ts).total_seconds() > 100:
                 log.info('Aborted fragment collection!')
                 stop_event.set()
-            fragment_queue.put(quad, timeout=queue_wait)
+            if quad not in fragment:
+                fragment.add(quad)
+                fragment_queue.put(quad, timeout=queue_wait)
 
         def __tp_weight(x):
             weight = int(x.s in var_filters) + int(x.o in var_filters)
@@ -648,15 +651,17 @@ class PlanExecutor(object):
                         predicate_pass[tp.p] = True
                         quads.add(quad)
 
-                    candidates.clear()
-
-                    if all(predicate_pass.values()):
-                        for q in quads:
-                            __put_quad_in_queue(q)
+                    if candidates and (not predicate_pass or not all(predicate_pass.values())):
                         quads.clear()
-                    else:
                         break
 
+                    candidates.clear()
+
+                if all(predicate_pass.values()):
+                    for q in quads:
+                        __put_quad_in_queue(q)
+                else:
+                    quads.clear()
 
             except Queue.Full:
                 stop_event.set()

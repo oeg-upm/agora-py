@@ -27,8 +27,10 @@ from datetime import datetime
 from multiprocessing import Queue
 from threading import Thread, Event, Lock
 
+import networkx as nx
 from agora.collector import Collector, triplify
 from agora.collector.cache import RedisCache
+from agora.collector.execution import FilterTree
 from agora.engine.plan import AbstractPlanner
 from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
@@ -123,7 +125,7 @@ class FragmentStream(object):
 
 
 class Fragment(object):
-    def __init__(self, agp, kv, triples, fragments_key, fid):
+    def __init__(self, agp, kv, triples, fragments_key, fid, filters=None):
         # type: (AGP, redis.StrictRedis, ConjunctiveGraph, str, str) -> Fragment
         self.__lock = Lock()
         self.key = '{}:{}'.format(fragments_key, fid)
@@ -140,6 +142,7 @@ class Fragment(object):
         self.__tp_map = {}
         self.__observers = set([])
         self.collecting = False
+        self.__filters = filters if isinstance(filters, dict) else {}
 
     @property
     def lock(self):
@@ -154,10 +157,19 @@ class Fragment(object):
         return self.__agp
 
     @property
+    def filters(self):
+        return self.__filters
+
+    @property
     def updated(self):
         with self.lock:
             self.__updated = False if self.kv.get('{}:updated'.format(self.key)) is None else True
             return self.__updated
+
+    @property
+    def newcomer(self):
+        with self.lock:
+            return self.kv.get('{}:stored'.format(self.key)) is None
 
     def updated_for(self, ttl):
         ttl = int(min(100000, ttl))  # sys.maxint don't work for expire values!
@@ -200,6 +212,11 @@ class Fragment(object):
             plan_turtle = kv.get('{}:{}:plan'.format(fragments_key, fid))
             fragment = Fragment(agp, kv, triples, fragments_key, fid)
             fragment.plan = Graph().parse(StringIO(plan_turtle), format='turtle')
+            sparql_filter_keys = kv.keys('{}:{}:filters:*'.format(fragments_key, fid))
+            for var_filter_key in sparql_filter_keys:
+                v = var_filter_key.split(':')[-1]
+                fragment.filters[Variable(v)] = set(kv.smembers(var_filter_key))
+
             return fragment
         except Exception:
             with kv.pipeline() as pipe:
@@ -211,6 +228,9 @@ class Fragment(object):
         fragment_key = '{}:{}'.format(self.__fragments_key, self.fid)
         pipe.delete(fragment_key)
         pipe.sadd('{}:gp'.format(fragment_key), *self.__agp)
+        for v in self.__filters.keys():
+            for f in self.__filters[v]:
+                pipe.sadd('{}:filters:{}'.format(fragment_key, str(v)), f)
 
     @property
     def generator(self):
@@ -270,7 +290,7 @@ class Fragment(object):
     def populate(self, collector):
         self.collecting = True
         self.stream.clear()
-        collect_dict = collector.get_fragment_generator(self.agp)
+        collect_dict = collector.get_fragment_generator(self.agp, filters=self.filters)
         self.plan = collect_dict['plan']
         back_id = uuid()
         n_triples = 0
@@ -287,6 +307,8 @@ class Fragment(object):
                 self.triples.get_context(str((self.fid, tp))).__iadd__(self.triples.get_context(str((back_id, tp))))
                 self.triples.remove_context(self.triples.get_context(str((back_id, tp))))
             actual_ttl = collect_dict.get('ttl')()
+            if not n_triples:
+                actual_ttl = 0
             elapsed = (datetime.utcnow() - pre_time).total_seconds()
             fragment_ttl = max(actual_ttl, elapsed)
             self.updated_for(fragment_ttl)
@@ -311,6 +333,17 @@ class Fragment(object):
             for tp in self.__tp_map.values():
                 self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
 
+    def mapping(self, agp, filters):
+        # type: (AGP, dict) -> dict
+        agp_map = self.agp.mapping(agp)
+        if agp_map:
+            if not self.filters:
+                return agp_map
+            rev_map = {v: k for k, v in agp_map.items()}
+            filter_map = {rev_map[v]: set(map(lambda x: x.replace(v, rev_map[v]), fs)) for v, fs in filters.items()}
+            if filter_map == self.filters:
+                return agp_map
+
 
 class FragmentIndex(object):
     def __init__(self, planner, key_prefix='', kv=None, triples=None):
@@ -332,21 +365,17 @@ class FragmentIndex(object):
             if fragment is not None:
                 yield (fragment_id, fragment)
 
-    def get(self, agp, general=False):
+    def get(self, agp, general=False, filters=None):
         # type: (AGP, bool) -> dict
         with self.__lock:
-            agp_keys = self.kv.keys('{}:*:gp'.format(self.__fragments_key))
-            for agp_key in agp_keys:
-                stored_agp = AGP(self.kv.smembers(agp_key), prefixes=self.__planner.fountain.prefixes)
-                mapping = stored_agp.mapping(agp)
+            for fragment_id, fragment in self.__fragments.items():
+                mapping = fragment.mapping(agp, filters)
                 filter_mapping = {}
                 if not mapping and general:
                     general, filter_mapping = _generalize_agp(agp, prefixes=self.__planner.fountain.prefixes)
-                    mapping = stored_agp.mapping(general)
+                    mapping = fragment.mapping(general, {})
                 if mapping:
-                    fragment_id = agp_key.split(':')[-2]
-                    return {'fragment': self.__fragments[fragment_id],
-                            'terms': mapping, 'literals': filter_mapping}
+                    return {'fragment': fragment, 'terms': mapping, 'literals': filter_mapping}
 
         return None
 
@@ -354,11 +383,11 @@ class FragmentIndex(object):
     def fragments(self):
         return self.__fragments
 
-    def register(self, agp):
+    def register(self, agp, filters=None):
         # type: (AGP, dict) -> Fragment
         with self.__lock:
             fragment_id = str(uuid())
-            fragment = Fragment(agp, self.kv, self.triples, self.__fragments_key, fragment_id)
+            fragment = Fragment(agp, self.kv, self.triples, self.__fragments_key, fragment_id, filters=filters)
             with self.kv.pipeline() as pipe:
                 pipe.sadd(self.__fragments_key, fragment_id)
                 fragment.save(pipe)
@@ -406,14 +435,19 @@ class Scholar(Collector):
         while self.__enabled:
             for fragment in self.__index.fragments.values():
                 if not fragment.updated and not fragment.collecting:
-                    collector = Collector(self.planner, self.cache)
-                    collector.loader = self.loader
-                    log.info('Starting fragment collection: {}'.format(fragment.fid))
-                    try:
-                        futures[fragment.fid] = tpool.submit(fragment.populate, collector)
-                    except RuntimeError as e:
-                        traceback.print_exc()
-                        log.warn(e.message)
+                    if not fragment.newcomer:
+                        log.info('Discarding fragment: {}'.format(fragment.fid))
+                        self.__index.remove(fragment.fid)
+
+                    else:
+                        collector = Collector(self.planner, self.cache)
+                        collector.loader = self.loader
+                        log.info('Starting fragment collection: {}'.format(fragment.fid))
+                        try:
+                            futures[fragment.fid] = tpool.submit(fragment.populate, collector)
+                        except RuntimeError as e:
+                            traceback.print_exc()
+                            log.warn(e.message)
 
             if futures:
                 log.info('Waiting for: {} collections'.format(len(futures)))
@@ -471,21 +505,53 @@ class Scholar(Collector):
         s, p, o = tp
         return TP(terms.get(s, s), terms.get(p, p), terms.get(o, o))
 
-    def mapped_gen(self, mapping):
+    def mapped_gen(self, mapping, filters):
         generator = mapping['fragment'].generator
         m_terms = mapping.get('terms', {})
+        agp = mapping['fragment'].agp
+        if filters == mapping['fragment'].filters:
+            filters = {}
+
+        ft = FilterTree()
+        for tp in agp:
+            mapped_tp = self.__map_tp(tp, m_terms)
+            ft.add_tp(mapped_tp)
+            elm = mapped_tp.s if mapped_tp.s in filters else mapped_tp.o
+            elm = elm if elm == mapped_tp.o and elm in filters else None
+            if elm is not None:
+                ft.add_variable(elm)
+
+        in_filter_path = {}
+        candidates = {}
+
         for c, s, p, o in generator:
-            yield self.__map_tp(c, m_terms), s, p, o
+            tp = self.__map_tp(c, m_terms)
+            if tp.s not in in_filter_path:
+                in_filter_path[tp.s] = False
+                for v in ft.variables:
+                    try:
+                        nx.shortest_path(ft.graph, tp.s, v)
+                        in_filter_path[tp.s] = True
+                    except Exception:
+                        pass
+
+            if not in_filter_path[tp.s]:
+                yield tp, s, p, o
+            else:
+                if tp not in candidates:
+                    candidates[tp] = set([])
+                candidates[tp].add((tp, s, p, o))
 
     def get_fragment_generator(self, agp, **kwargs):
-        mapping = self.__index.get(agp, general=True)
+        filters = kwargs.get('filters', None)
+        mapping = self.__index.get(agp, general=True, filters=filters)
         if not mapping:
             # Register fragment
-            fragment = self.__index.register(agp)
+            fragment = self.__index.register(agp, filters=filters)
             mapping = {'fragment': fragment}
 
         self.__daemon_event.set()
-        return {'plan': self.mapped_plan(mapping), 'generator': self.mapped_gen(mapping),
+        return {'plan': self.mapped_plan(mapping), 'generator': self.mapped_gen(mapping, filters),
                 'prefixes': self.planner.fountain.prefixes.items()}
 
     def __exit__(self, type, value, traceback):

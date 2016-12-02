@@ -223,7 +223,7 @@ def __serialize_expr(expr, context=None):
                 op_str = expr['op']
             return '{} {} {}'.format(expr_str, op_str, other_str)
     elif isinstance(expr, list):
-        return __sparql_op_symbols[context].join(map(lambda x: __serialize_expr(x, expr.name), expr))
+        return __sparql_op_symbols[context].join(map(lambda x: __serialize_expr(x), expr))
     else:
         if isinstance(expr, Variable):
             return expr.n3()
@@ -235,7 +235,7 @@ def __serialize_filter(f):
     return '{}'.format(__serialize_expr(f))
 
 
-def __discriminate_filters(expr):
+def discriminate_filters(expr):
     if isinstance(expr, Expr):
         n = len(expr._vars)
         if n == 1:
@@ -243,10 +243,10 @@ def __discriminate_filters(expr):
                 f_str = __serialize_filter(expr)
                 yield v, f_str
         elif n > 1 and expr.get('op', None) and expr.name == 'ConditionalAndExpression':
-            for f in __discriminate_filters(expr.expr):
+            for f in discriminate_filters(expr.expr):
                 yield f
             for e in expr['other']:
-                for f in __discriminate_filters(e):
+                for f in discriminate_filters(e):
                     yield f
     elif isinstance(expr, Variable):
         yield expr, __serialize_filter(expr)
@@ -254,7 +254,7 @@ def __discriminate_filters(expr):
 
 def evalFilter(ctx, part):
     # TODO: Deal with dict returned from evalPart!
-    for v, f in __discriminate_filters(part.expr):
+    for v, f in discriminate_filters(part.expr):
         if v not in ctx.filters:
             ctx.filters[v] = set([])
         ctx.filters[v].add(f)

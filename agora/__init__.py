@@ -89,7 +89,7 @@ class Agora(object):
         graph = self.__get_agora_graph(collector, cache, loader)
         agps = list(graph.agps(query)) if query else agps
 
-        generators = [graph.collector.get_fragment_generator(agp) for agp in agps]
+        generators = [graph.collector.get_fragment_generator(agp, filters=filters) for agp, filters in agps]
         prefixes = {}
         comp_plan = Graph(namespace_manager=graph.namespace_manager)
         for g in generators:

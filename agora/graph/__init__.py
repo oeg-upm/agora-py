@@ -155,5 +155,5 @@ class AgoraGraph(ConjunctiveGraph):
         return result.plan
 
     def agps(self, query_object):
-        for bgp in extract_bgps(query_object, prefixes=self.__collector.prefixes):
-            yield self.build_agp(bgp.triples)
+        for bgp, filters in extract_bgps(query_object, prefixes=self.__collector.prefixes):
+            yield self.build_agp(bgp.triples), filters

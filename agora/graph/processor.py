@@ -21,7 +21,7 @@
 import logging
 from datetime import datetime
 
-from agora.graph.evaluate import evalQuery
+from agora.graph.evaluate import evalQuery, discriminate_filters
 from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.parser import parseQuery
 from rdflib.plugins.sparql.processor import SPARQLResult, SPARQLProcessor
@@ -56,20 +56,59 @@ class FragmentResult(SPARQLResult):
                     yield ResultRow(b, self.vars)
 
 
+def __traverse_part(part, filters):
+    if part.name == 'Filter':
+        for v, f in discriminate_filters(part.expr):
+            if v not in filters:
+                filters[v] = set([])
+            filters[v].add(f)
+    if part.name == 'BGP':
+        yield part
+    else:
+        if hasattr(part, 'p1') and part.p1 is not None:
+            for p in __traverse_part(part.p1, filters):
+                yield p
+        if hasattr(part, 'p2') and part.p2 is not None:
+            for p in __traverse_part(part.p2, filters):
+                yield p
+
+    if part.p is not None:
+        for p in __traverse_part(part.p, filters):
+            yield p
+
+
 def extract_bgps(query, prefixes):
     parsetree = parseQuery(query)
     query = translateQuery(parsetree, initNs=prefixes)
     part = query.algebra
-    while part:
-        if part.name == 'BGP':
-            yield part
-        elif part.name == 'LeftJoin':
-            yield part.p1
-            yield part.p2
-        elif part.name == 'Minus':
-            yield part.p1
-            yield part.p2
-        part = part.p
+    filters = {}
+    bgps = []
+
+    for p in __traverse_part(part, filters):
+        bgps.append(p)
+
+    for bgp in bgps:
+        yield bgp, {v: filters[v] for v in bgp._vars if v in filters}
+
+        # while part:
+        #     if part.name == 'Filter':
+        #         for v, f in discriminate_filters(part.expr):
+        #             if v not in filters:
+        #                 filters[v] = set([])
+        #             filters[v].add(f)
+        #     if part.name == 'BGP':
+        #         bgps.append(part)
+        #     else:
+        #         if hasattr(part, 'p1') and part.p1 is not None:
+        #             bgps.append(part.p1)
+        #         if hasattr(part, 'p2') and part.p2 is not None:
+        #             bgps.append(part.p2)
+        #     part = part.p
+        #
+        # print filters
+        #
+        # for bgp in bgps:
+        #     yield bgp
 
 
 class FragmentProcessor(SPARQLProcessor):
