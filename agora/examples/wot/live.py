@@ -5,7 +5,7 @@ from time import sleep
 from agora import Agora, setup_logging
 import agora.examples
 
-setup_logging(logging.INFO)
+setup_logging(logging.DEBUG)
 
 # Agora object
 agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
@@ -45,14 +45,14 @@ q4 = """SELECT ?s ?v ?d WHERE { ?s rdfs:label "tamb" ;
                                 wot:hasLatestEntry [
                                     wot:value ?v
                                  ] .
-                              FILTER (?v > -50)}"""
+                              FILTER (?v>17.0)}"""
 
 q5 = """SELECT ?s ?d WHERE { ?s rdfs:label "mag" . ?s wot:observedBy ?d }"""
 
 q6 = """SELECT * WHERE { ?s a wot:WebThing ; wot:identifier ?i ; wot:encapsulatesSystem ?sys }"""
 
 q7 = """SELECT * WHERE {
-                            ?w wot:identifier ?id .
+                            ?w wot:identifier "stars1" .
                             ?w wot:hasWebThingProperty ?wp .
                             ?wp rdfs:label ?prop .
                             ?wp wot:hasLatestEntry ?le .
@@ -61,24 +61,49 @@ q7 = """SELECT * WHERE {
                             ?wp wot:hasLog ?log .
                             ?log wot:hasEntry ?loge .
                             ?loge wot:value ?value .
-                          }"""
+                          FILTER (STR(?prop)="tamb")}"""
+
+q8 = """SELECT ?s ?v ?d WHERE { ?s rdfs:label ?prop ;
+                                <http://www.wot.org#observedBy> ?d ;
+                                wot:hasLatestEntry [
+                                    wot:value ?v
+                                 ] .
+                              FILTER (STR(?prop)="tamb")}"""
+
+
+q9 = """SELECT * WHERE {
+                            ?w wot:hasWebThingProperty ?wp .
+                            ?wp rdfs:label "tsky" .
+                            ?wp wot:hasLatestEntry ?le .
+                            ?le wot:value ?lvalue FILTER(?lvalue > 0) .
+                            ?le wot:entryTimeStamp ?lt .
+                            ?wp wot:hasLog ?log .
+                            ?log wot:hasEntry ?loge .
+                            ?loge wot:value ?value }"""
+
+
+q10 = """SELECT * WHERE { ?s rdfs:label ?l }"""
 
 elapsed = []
 
-for query in [q7]:
-    pre = datetime.now()
-    n = 0
-    for row in agora.query(query):
-        print '[', (datetime.now() - pre).total_seconds(), '] solution:',
-        for label in row.labels:
-            print label + '=' + str(row[label]),
-        print
-        n += 1
-        #sleep(1)
-    print n, 'solutions'
-    post = datetime.now()
-    elapsed.append((post - pre).total_seconds())
 
-print elapsed
+fgen = agora.fragment_generator(q10)['generator']
+for tp, s, p, o in fgen:
+    print s.n3(), p.n3(), o.n3()
+#
+# for query in [q10]:
+#     pre = datetime.now()
+#     n = 0
+#     for row in agora.query(query, incremental=True):
+#         print '[', (datetime.now() - pre).total_seconds(), '] solution:',
+#         for label in row.labels:
+#             print label + '=' + str(row[label]),
+#         print
+#         n += 1
+#     print n, 'solutions'
+#     post = datetime.now()
+#     elapsed.append((post - pre).total_seconds())
+#
+# print elapsed
 
 # raw_input()

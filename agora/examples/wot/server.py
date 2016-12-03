@@ -8,7 +8,7 @@ from agora.server.fragment import build as bf
 from agora.server.planner import build as bp
 from agora.server.sparql import build as bs
 
-setup_logging(logging.DEBUG)
+setup_logging(logging.INFO)
 
 cache = RedisCache(min_cache_time=20, persist_mode=True, path='cache', redis_file='store/cache/cache.db')
 

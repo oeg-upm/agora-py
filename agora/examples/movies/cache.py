@@ -34,10 +34,10 @@ __author__ = 'Fernando Serena'
 setup_logging(logging.DEBUG)
 
 # Create a cache for fragment collection
-cache = RedisCache(min_cache_time=30, persist_mode=True, path='movies', redis_file='store/movies.db')
+cache = RedisCache(min_cache_time=10, persist_mode=True, path='cache', redis_file='store/cache/cache.db')
 
 # Agora object
-agora = Agora(persist_mode=True, redis_file='store/fountain.db')
+agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
 
 # Open and add the vocabulary that we want to use to explore movies and associated data in dbpedia
 with open('movies.ttl') as f:
@@ -57,9 +57,9 @@ for film in load_films_from_dbpedia():
 
 # Example queries
 queries = ["""SELECT * WHERE {?film foaf:name ?name .
-                                           ?film dbpedia-owl:starring ?actor .
-                                           OPTIONAL {?actor dbp:birthName ?birth }
-                                          }"""]
+                               ?film dbpedia-owl:starring ?actor .
+                               OPTIONAL {?actor dbp:birthName ?birth }
+                              FILTER (STR(?name)="2046")}"""]
 
 # queries = ["""SELECT * WHERE {?film foaf:name ?name .
 #                                            ?film dbpedia-owl:starring ?actor

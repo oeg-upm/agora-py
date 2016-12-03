@@ -54,23 +54,23 @@ for film in load_films_from_dbpedia():
         pass
 
 # Example queries
-queries = ["""SELECT * WHERE {?film foaf:name ?name .
-                                           ?film dbpedia-owl:starring ?actor .
-                                           OPTIONAL {?actor dbp:birthName ?birth }
+# queries = ["""SELECT * WHERE {?film foaf:name ?name .
+#                                            ?film dbpedia-owl:starring ?actor .
+#                                            OPTIONAL {?actor dbp:birthName ?birth }
+#                                           }"""]
+
+# queries = ["""SELECT * WHERE {?film foaf:name ?name .
+#                                            ?film dbpedia-owl:starring ?actor
+#                                           }"""]
+
+# queries = ["""SELECT * WHERE {?film foaf:name ?name .
+#                                            ?film dbpedia-owl:starring ?actor
+#                                           }"""]
+
+queries = ["""SELECT DISTINCT ?actor WHERE { ?film foaf:name "10"@en .
+                                             ?film dbpedia-owl:starring ?actor .
+                                             ?actor dbp:birthName ?bname FILTER(STR(?bname)="Mary Cathleen Collins")
                                           }"""]
-
-# queries = ["""SELECT * WHERE {?film foaf:name ?name .
-#                                            ?film dbpedia-owl:starring ?actor
-#                                           }"""]
-
-# queries = ["""SELECT * WHERE {?film foaf:name ?name .
-#                                            ?film dbpedia-owl:starring ?actor
-#                                           }"""]
-
-# queries = ["""SELECT DISTINCT ?actor WHERE { ?film foaf:name "10"@en .
-#                                              ?film dbpedia-owl:starring ?actor .
-#                                              ?actor dbp:birthName "Mary Cathleen Collins"@en
-#                                           }"""]
 
 # queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor ;
 #                                  dbp:birthName ?name .

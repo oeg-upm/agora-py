@@ -1,18 +1,12 @@
 import logging
+from datetime import datetime
 
-import requests
 from agora import Agora, setup_logging
 from agora.collector.cache import RedisCache
 from agora.collector.scholar import Scholar
 from agora.engine.fountain.onto import DuplicateVocabulary
-from agora.examples.librairy import wrapper, LIBRAIRY, get_document_graph, get_service_graph
-from datetime import datetime
-from dateutil.parser import parse
-from rdflib import Graph
-from rdflib import Literal
-from rdflib import RDF
+from agora.examples.librairy import wrapper, get_document_graph, get_service_graph
 from rdflib import URIRef
-from rdflib import XSD
 
 cache = RedisCache(min_cache_time=100, persist_mode=True, path='cache', redis_file='store/cache/cache.db')
 
@@ -49,9 +43,8 @@ try:
 except Exception:
     pass
 
-q1 = """SELECT (COUNT(DISTINCT ?title) as ?cnt) WHERE { [] a librairy:Document ;
-                            librairy:title ?title ;
-                            librairy:creationTime ?created }"""
+q1 = """SELECT ?title WHERE { [] a librairy:Document ;
+                            librairy:title ?title }"""
 
 scholar = Scholar(agora.planner, cache=cache, loader=wrapper.load)
 
@@ -59,7 +52,7 @@ elapsed = []
 
 for query in [q1]:
     pre = datetime.now()
-    for row in agora.query(query, collector=scholar):
+    for row in agora.query(query, collector=scholar, incremental=True):
         print row.asdict()
     print
     post = datetime.now()

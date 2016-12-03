@@ -55,33 +55,48 @@ function isURI(elm) {
         .controller('SPARQLController', ['$scope', '$log', '$http', '$timeout', '$q',
             function ($scope, $log, $http, $timeout, $q) {
                 $scope.solutions = false;
-                $scope.fragmentSolutions = false;
+                $scope.fragment = false;
                 $scope.query = 'PREFIX wot: <http://www.wot.org#> \
 SELECT * WHERE {?s rdfs:label ?l ; wot:hasLatestEntry [ wot:value ?v ] }';
                 console.log('hello from SPARQL!');
-                $scope.triples = undefined;
+                $scope.triples = [];
+                $scope.results = [];
+                $scope.vars = [];
 
                 // set options and call the d3sparql.xxxxx visualization methods in this library ...
                 let config = {
                     "selector": "#result"
                 };
 
-                $scope.request = function () {
-                    $scope.triples = undefined;
-                    d3sparql.query('http://localhost:5000/sparql', $scope.query, function (json) {
-                        console.log(json);
-                        d3sparql.htmltable(json, config);
-                        $timeout(function () {
-                            $scope.solutions = true;
-                        }, 0);
-                    });
+                $scope.runQuery = function () {
+                    $scope.results = [];
+                    $scope.vars = [];
+
+                    oboe({
+                        url: 'http://localhost:5000/sparql?query=' + encodeURIComponent($scope.query),
+                        headers: {
+                            'Accept': 'application/sparql-results+json'
+                        }
+                    }).node(
+                        'vars.*', function (v) {
+                            console.log(v);
+                            $scope.vars.push(v);
+                        }
+                    ).node(
+                        'bindings.*', function (r) {
+                            $timeout(function () {
+                                $scope.solutions = true;
+                            }, 0);
+                            console.log(r);
+                            $scope.results.push(r);
+                        }
+                    );
                 };
 
-                $scope.fragment = function () {
+                $scope.getFragment = function () {
                     $scope.triples = [];
-                    $scope.solutions = false;
-
                     let promises = [];
+                    $scope.fragment = false;
 
                     function parse_chunk(chunk) {
                         let quads = chunk.split('\n');
@@ -102,7 +117,7 @@ SELECT * WHERE {?s rdfs:label ?l ; wot:hasLatestEntry [ wot:value ?v ] }';
                                     resolve(triple);
                                 }
                             });
-                            promises.push(promise);
+                            //promises.push(promise);
                         });
                     }
 
@@ -133,50 +148,53 @@ SELECT * WHERE {?s rdfs:label ?l ; wot:hasLatestEntry [ wot:value ?v ] }';
                                             let chunk = preFill + event.target.response.substring(lastLoaded, nlIndex);
                                             lastLoaded = nlIndex;
                                             preFill = event.target.response.substring(nlIndex);
-                                            promises.push(parse_chunk(chunk));
+                                            parse_chunk(chunk);
+                                            $timeout(function () {
+                                                $scope.fragment = true;
+                                            }, 0);
                                         }
                                     }
                                 }
                             }).success(function (d) {
-                                $q.all(promises).then(function (res) {
-                                    console.log(res);
-                                    let scope = $scope;
-                                    $scope.store.insert($scope.graph, function () {
-                                        $scope.store.execute($scope.query, function (err, results) {
-                                            let vars = [];
-                                            let bindings = [];
-                                            if (results != undefined) {
-                                                bindings = results.map(function (r) {
-                                                    let r_prime = {};
-                                                    for (let v in r) {
-                                                        if (r.hasOwnProperty(v)) {
-                                                            if (vars.indexOf(v) < 0) {
-                                                                vars.push(v);
-                                                            }
-                                                            let value = null;
-                                                            if (r[v] != null) {
-                                                                value = r[v].value;
-                                                            }
-                                                            r_prime[v] = {
-                                                                value: value,
-                                                                type: r[v].token
-                                                            }
-                                                        }
-                                                    }
-                                                    return r_prime;
-                                                });
-                                            }
+                                /* $q.all(promises).then(function (res) {
+                                 console.log(res);
+                                 let scope = $scope;
+                                 $scope.store.insert($scope.graph, function () {
+                                 $scope.store.execute($scope.query, function (err, results) {
+                                 let vars = [];
+                                 let bindings = [];
+                                 if (results != undefined) {
+                                 bindings = results.map(function (r) {
+                                 let r_prime = {};
+                                 for (let v in r) {
+                                 if (r.hasOwnProperty(v)) {
+                                 if (vars.indexOf(v) < 0) {
+                                 vars.push(v);
+                                 }
+                                 let value = null;
+                                 if (r[v] != null) {
+                                 value = r[v].value;
+                                 }
+                                 r_prime[v] = {
+                                 value: value,
+                                 type: r[v].token
+                                 }
+                                 }
+                                 }
+                                 return r_prime;
+                                 });
+                                 }
 
-                                            let sparql_result = {head: {vars: vars}, results: {bindings: bindings}};
-                                            console.log(sparql_result);
-                                            d3sparql.htmltable(sparql_result, config);
-                                            $timeout(function () {
-                                                scope.solutions = true;
-                                                scope.store.close();
-                                            }, 0);
-                                        });
-                                    });
-                                });
+                                 let sparql_result = {head: {vars: vars}, results: {bindings: bindings}};
+                                 console.log(sparql_result);
+                                 //d3sparql.htmltable(sparql_result, config);
+                                 $timeout(function () {
+                                 scope.solutions = true;
+                                 scope.store.close();
+                                 }, 0);
+                                 });
+                                 });
+                                 });*/
                             });
                         });
                     });

@@ -34,10 +34,10 @@ __author__ = 'Fernando Serena'
 setup_logging(logging.DEBUG)
 
 # Create a cache for fragment collection
-cache = RedisCache(min_cache_time=30, persist_mode=True, path='movies', redis_file='store/movies.db')
+cache = RedisCache(min_cache_time=10, persist_mode=True, path='cache', redis_file='store/cache/cache.db')
 
 # Agora object
-agora = Agora(persist_mode=True, redis_file='store/fountain.db')
+agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
 
 # Open and add the vocabulary that we want to use to explore movies and associated data in dbpedia
 with open('movies.ttl') as f:
@@ -76,31 +76,37 @@ scholar = Scholar(agora.planner, cache=cache)
 
 # queries = ["""SELECT * WHERE {?film a dbpedia-owl:Film . ?film foaf:name ?name }"""]
 
-queries = ["""SELECT ?name WHERE { ?actor dbp:birthName ?name }"""]
+q1 = """SELECT * WHERE { ?film foaf:name ?name .
+                         ?film dbpedia-owl:starring ?actor .
+                         OPTIONAL {?actor dbp:birthName ?birth }
+                         FILTER (STR(?name)="2046")
+                        }"""
+
+q2 = """SELECT * WHERE { ?film foaf:name ?name .
+                         ?film dbpedia-owl:starring [ dbp:birthName ?birth ]
+                         FILTER (isLITERAL(?name))
+                        }"""
 
 elapsed = []
 
-# for t in agora.fragment_generator(queries[0], collector=scholar):
-#     print t
-#
-# for row in agora.fragment(queries[0], collector=scholar).query(queries[0]):
-#     print row.asdict()
-
-
-for row in agora.query(queries[0], collector=scholar):
-    print row.asdict()
-
-
-# for query in queries:
-#     pre = datetime.now()
+for query in [q2]:
+    pre = datetime.now()
 # Ask agora for results of the given query,
 # evaluating candidate results for each fragment triple collected (chunk_size=1)
 # -> Removing chunk_size argument forces to wait until all relevant triples are collected
-# for row in agora.query(query, cache=cache):
-#     print row.asdict()
-# post = datetime.now()
-# elapsed.append((post - pre).total_seconds())
-#
-# print elapsed
+    n = 0
+    for row in agora.query(query, collector=scholar):
+        print '[', (datetime.now() - pre).total_seconds(), '] solution:',
+        for label in row.labels:
+            if row[label] is not None:
+                print label + '=' + (row[label]).toPython(),
+        print
+        n += 1
+    print n, 'solutions'
+    post = datetime.now()
+    elapsed.append((post - pre).total_seconds())
+
+print elapsed
+
 
 scholar.shutdown(wait=False)

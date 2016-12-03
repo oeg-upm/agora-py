@@ -1,22 +1,32 @@
-<div style="height:100%; padding-top:52px; padding-left: 5px; padding-right: 5px">
+<div style="height:100%; padding-top:52px; padding-left: 10px; padding-right: 15px">
     <h4 class="title">Query text</h4>
     <div style="width: 100%">
-        <textarea type="text" class="form-control" placeholder="Query" ng-model="query"></textarea>
-        <button class="btn btn-default" type="button" ng-click="request()" style="margin-top:5px">Run query</button>
-        <button class="btn btn-default" type="button" ng-click="fragment()" style="margin-top:5px">Get fragment</button>
+        <textarea type="text" class="form-control" placeholder="Query" ng-model="query" spellcheck="false"></textarea>
+        <button class="btn btn-default" type="button" ng-click="runQuery()" style="margin-top:5px">Run query</button>
+        <button class="btn btn-default" type="button" ng-click="getFragment()" style="margin-top:5px">Get fragment</button>
     </div>
-    <div ng-show="solutions == true">
-        <h4 class="title">Query results</h4>
-        <div style="width: 100%">
-            <div id="result"></div>
+    {% raw %}
+    <div class="container-fluid">
+        <div class="row">
+            <div ng-show="solutions == true" class="col-md-5" style="padding-left: 0px">
+                <h4 class="title">Query results<span id="rbadge" class="badge">{{results.length}}</span></h4>
+                <div class="result" ng-repeat="r in results">
+
+                    <table class="table">
+                        <tr ng-repeat="v in vars">
+                            <td class="var">{{v}}</td>
+                            <td class="value">{{r[v].value}}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+            <div ng-show="fragment == true" class="col-md-7">
+                <h4 class="title">Fragment triples<span id="fbadge" class="badge">{{triples.length}}</span></h4>
+                <div ng-repeat="triple in triples">
+                    <p class="triple value">{{triple[0]}} {{triple[1]}} {{triple[2]}} .</p>
+                </div>
+            </div>
         </div>
     </div>
-    <div ng-show="triples != undefined">
-        <h4 class="title">Fragment triples</h4>
-        {% raw %}
-        <div ng-repeat="triple in triples">
-            <p class="triple">{{triple[0]}} {{triple[1]}} {{triple[2]}} .</p>
-        </div>
-        {% endraw %}
-    </div>
+    {% endraw %}
 </div>
