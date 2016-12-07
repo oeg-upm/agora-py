@@ -13,7 +13,7 @@
                 <div class="result" ng-repeat="r in results">
 
                     <table class="table">
-                        <tr ng-repeat="v in vars">
+                        <tr ng-if="r[v] != null" ng-repeat="v in vars">
                             <td class="var">{{v}}</td>
                             <td class="value">{{r[v].value}}</td>
                         </tr>
