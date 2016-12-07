@@ -28,6 +28,21 @@ from multiprocessing import Queue
 from threading import Thread, Event, Lock
 
 import networkx as nx
+import redis
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait
+from rdflib import ConjunctiveGraph, Graph
+from rdflib import Literal
+from rdflib import RDF
+from rdflib import RDFS
+from rdflib import URIRef
+from rdflib import Variable
+from rdflib.plugins.sparql.algebra import translateQuery
+from rdflib.plugins.sparql.parser import Query
+from rdflib.plugins.sparql.parser import expandUnicodeEscapes
+from rdflib.plugins.sparql.sparql import QueryContext
+from shortuuid import uuid
+
 from agora.collector import Collector, triplify
 from agora.collector.cache import RedisCache
 from agora.collector.execution import FilterTree
@@ -37,15 +52,6 @@ from agora.engine.plan.graph import AGORA
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
 from agora.graph import extract_tps_from_plan
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import wait
-from rdflib import ConjunctiveGraph, Graph
-from rdflib import Literal
-from rdflib import RDF
-from rdflib import RDFS
-from rdflib import URIRef
-from rdflib import Variable
-from shortuuid import uuid
 
 __author__ = 'Fernando Serena'
 
@@ -93,7 +99,7 @@ def _generalize_agp(agp, prefixes=None):
 
 class FragmentStream(object):
     def __init__(self, store, key):
-        # type: (redis.StrictRedis, str) -> FragmentStream
+        # type: (redis.StrictRedis, str) -> None
         self.key = key
         self.store = store
 
@@ -126,7 +132,7 @@ class FragmentStream(object):
 
 class Fragment(object):
     def __init__(self, agp, kv, triples, fragments_key, fid, filters=None):
-        # type: (AGP, redis.StrictRedis, ConjunctiveGraph, str, str) -> Fragment
+        # type: (AGP, redis.StrictRedis, ConjunctiveGraph, str, str) -> None
         self.__lock = Lock()
         self.key = '{}:{}'.format(fragments_key, fid)
         self.__agp = agp
@@ -347,7 +353,7 @@ class Fragment(object):
 
 class FragmentIndex(object):
     def __init__(self, planner, key_prefix='', kv=None, triples=None):
-        # type: (AbstractPlanner, str, redis.StrictRedis) -> FragmentIndex
+        # type: (AbstractPlanner, str, redis.StrictRedis) -> None
         self.__key_prefix = key_prefix
         self.__fragments_key = '{}:fragments'.format(key_prefix)
         self.kv = kv if kv is not None else get_kv()
@@ -367,15 +373,25 @@ class FragmentIndex(object):
 
     def get(self, agp, general=False, filters=None):
         # type: (AGP, bool) -> dict
+        mapping = None
         with self.__lock:
-            for fragment_id, fragment in self.__fragments.items():
+            for fragment_id in sorted(self.__fragments, key=lambda x: abs(
+                            len(self.__fragments[x].filters) - len(filters)), reverse=False):
+                fragment = self.__fragments[fragment_id]
                 mapping = fragment.mapping(agp, filters)
                 filter_mapping = {}
-                if not mapping and general:
-                    general, filter_mapping = _generalize_agp(agp, prefixes=self.__planner.fountain.prefixes)
-                    mapping = fragment.mapping(general, {})
                 if mapping:
-                    return {'fragment': fragment, 'terms': mapping, 'literals': filter_mapping}
+                    break
+
+            if general and mapping is None:
+                general, filter_mapping = _generalize_agp(agp, prefixes=self.__planner.fountain.prefixes)
+                for fragment_id, fragment in self.__fragments.items():
+                    mapping = fragment.mapping(general, {})
+                    if mapping:
+                        break
+
+            if mapping is not None:
+                return {'fragment': fragment, 'vars': mapping, 'filters': filter_mapping}
 
         return None
 
@@ -409,7 +425,7 @@ class FragmentIndex(object):
 
 class Scholar(Collector):
     def __init__(self, planner, cache=None, loader=None):
-        # type: (AbstractPlanner, RedisCache) -> Scholar
+        # type: (AbstractPlanner, RedisCache, object) -> None
         super(Scholar, self).__init__(planner, cache)
         # Scholars require cache
         self.loader = loader
@@ -430,7 +446,6 @@ class Scholar(Collector):
         self.__daemon.start()
 
     def _daemon(self):
-        # type: (FragmentIndex, AbstractPlanner) -> None
         futures = {}
         while self.__enabled:
             for fragment in self.__index.fragments.values():
@@ -467,8 +482,8 @@ class Scholar(Collector):
 
     @staticmethod
     def __map(mapping, elm):
-        map_terms = mapping.get('terms', None)
-        map_literals = mapping.get('literals', None)
+        map_terms = mapping.get('vars', None)
+        map_literals = mapping.get('filters', None)
         result = elm
         if map_terms:
             result = map_terms.get(result, result)
@@ -501,49 +516,134 @@ class Scholar(Collector):
 
         return mapped_plan
 
-    def __map_tp(self, tp, terms):
+    def __map_tp(self, tp, vars):
         s, p, o = tp
-        return TP(terms.get(s, s), terms.get(p, p), terms.get(o, o))
+        return TP(vars.get(s, s), vars.get(p, p), vars.get(o, o))
+
+    def __apply_filter(self, v, resource, filters, agp_filters):
+        if v in filters:
+            for var_f in filters[v]:
+                context = QueryContext()
+                context[v] = resource
+                passing = var_f.expr.eval(context) if hasattr(var_f.expr, 'eval') else bool(
+                    resource.toPython())
+                if not passing:
+                    return True
+        elif v in agp_filters:
+            return resource != agp_filters.get(v)
+        return False
+
+    def __follow_filter(self, candidates, tp, s, o, trace=None, prev=None):
+        def seek_join(tps, f):
+            for t in tps:
+                for (ss, oo) in filter(lambda x: f(x), candidates[t]):
+                    if (ss, t.p, oo) not in trace:
+                        yield (t, ss, t.p, oo)
+                        trace.add((ss, t.p, oo))
+                        for q in self.__follow_filter(candidates, t, ss, oo, trace, prev=tp):
+                            yield q
+
+        if trace is None:
+            trace = set([])
+        trace.add((s, tp.p, o))
+        valid_tps = filter(lambda x: x != prev, candidates.keys())
+        up_tps = filter(lambda x: x != prev and x.o == tp.s, valid_tps)
+        for q in seek_join(up_tps, lambda (ss, oo): oo == s):
+            yield q
+        down_tps = filter(lambda x: x.s == tp.o, valid_tps)
+        for q in seek_join(down_tps, lambda (ss, oo): ss == o):
+            yield q
+        sib_tps = filter(lambda x: x.s == tp.s and x.o != tp.o, valid_tps)
+        for q in seek_join(sib_tps, lambda (ss, oo): ss == s):
+            yield q
 
     def mapped_gen(self, mapping, filters):
         generator = mapping['fragment'].generator
-        m_terms = mapping.get('terms', {})
+        m_vars = mapping.get('vars', {})
+        m_filters = mapping.get('filters', {})
         agp = mapping['fragment'].agp
         if filters == mapping['fragment'].filters:
             filters = {}
 
-        ft = FilterTree()
-        for tp in agp:
-            mapped_tp = self.__map_tp(tp, m_terms)
-            ft.add_tp(mapped_tp)
-            elm = mapped_tp.s if mapped_tp.s in filters else mapped_tp.o
-            elm = elm if elm == mapped_tp.o and elm in filters else None
-            if elm is not None:
-                ft.add_variable(elm)
+        var_filters = {}
+        if filters:
+            for v in filters:
+                var_filters[v] = []
+                for f in filters[v]:
+                    f = 'SELECT * WHERE { FILTER (%s) }' % f
+                    parse = Query.parseString(expandUnicodeEscapes(f), parseAll=True)
+                    query = translateQuery(parse)
+                    var_filters[v].append(query.algebra.p.p)
 
+        ft = FilterTree()
         in_filter_path = {}
         candidates = {}
+        mapped_agp = [self.__map_tp(tp, m_vars) for tp in agp]
+        for tp in mapped_agp:
+            ft.add_tp(tp)
+            if tp.s in filters or tp.s in m_filters:
+                ft.add_variable(tp.s)
+            if tp.o in filters or tp.o in m_filters:
+                ft.add_variable(tp.o)
 
-        for c, s, p, o in generator:
-            tp = self.__map_tp(c, m_terms)
+        ugraph = ft.graph.to_undirected()
+
+        for tp in mapped_agp:
             if tp.s not in in_filter_path:
                 in_filter_path[tp.s] = False
                 for v in ft.variables:
                     try:
-                        nx.shortest_path(ft.graph, tp.s, v)
+                        nx.has_path(ugraph, tp.s, v)
                         in_filter_path[tp.s] = True
-                    except Exception:
+                        break
+                    except:
                         pass
 
-            if not in_filter_path[tp.s]:
+        for c, s, p, o in generator:
+            tp = self.__map_tp(c, m_vars)
+
+            if not in_filter_path.get(tp.s, False):
                 yield tp, s, p, o
             else:
-                if tp not in candidates:
-                    candidates[tp] = set([])
-                candidates[tp].add((tp, s, p, o))
+                passing = True
+                if self.__apply_filter(tp.s, s, var_filters, m_filters):
+                    ft.filter(s, None, tp.s)
+                    passing = False
+                if self.__apply_filter(tp.o, o, var_filters, m_filters):
+                    ft.filter(o, None, tp.o)
+                    passing = False
+
+                if passing:
+                    if tp not in candidates:
+                        candidates[tp] = set([])
+                    candidates[tp].add((s, o))
+
+        tp_filter_roots = filter(lambda x: x.s in ft.variables or x.o in ft.variables, candidates.keys())
+        tp_filter_roots = sorted(tp_filter_roots, key=lambda x: len(ft.graph.successors(x.o)), reverse=True)
+        for tp in tp_filter_roots:
+            pairs = {}
+            for (s, o) in candidates.get(tp, []):
+                if tp not in pairs:
+                    pairs[tp] = set([])
+                pairs[tp].add((s, o))
+                for ftp, fs, fp, fo in self.__follow_filter(candidates, tp, s, o):
+                    if ftp not in pairs:
+                        pairs[ftp] = set([])
+                    pairs[ftp].add((fs, fo))
+                    candidates[ftp].remove((fs, fo))
+
+            if len(candidates) != len(pairs):
+                candidates = {}
+                break
+            else:
+                candidates = pairs.copy()
+
+        for tp, pairs in candidates.items():
+            for s, o in pairs:
+                yield tp, s, tp.p, o
 
     def get_fragment_generator(self, agp, **kwargs):
-        filters = kwargs.get('filters', None)
+        filters = kwargs.get('filters', {})
         mapping = self.__index.get(agp, general=True, filters=filters)
         if not mapping:
             # Register fragment

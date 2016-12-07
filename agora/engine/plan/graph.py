@@ -126,7 +126,7 @@ def graph_plan(plan, fountain):
         if isinstance(obj, BNode):
             __add_variable(pattern_node, str(obj), subject=False)
         elif isinstance(obj, Literal):
-            node = BNode(str(obj).replace(' ', ''))
+            node = BNode(str(obj).replace(' ', '').replace(':', ''))
             plan_graph.add((pattern_node, AGORA.object, node))
             plan_graph.set((node, RDF.type, AGORA.Literal))
             plan_graph.set((node, AGORA.value, obj))
