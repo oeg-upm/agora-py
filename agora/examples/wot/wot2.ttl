@@ -1,0 +1,283 @@
+@prefix wot: <http://www.wot.org#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ssn: <http://purl.oclc.org/NET/ssnx/ssn#> .
+@prefix sch: <http://schema.org/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix geo: <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+
+<http://www.wot.org> rdf:type owl:Ontology .
+
+wot:Service a owl:Class .
+
+wot:Thing a owl:Class ;
+        rdfs:subClassOf [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty wot:identifier ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty wot:name ;
+                            owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty wot:description ;
+                            owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty wot:creationDate ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty wot:tag ;
+                            owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty wot:location ;
+                            owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ] .
+
+wot:location a owl:ObjectProperty ;
+    rdfs:range sch:Place .
+
+sch:Place a owl:Class ;
+        rdfs:subClassOf [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty foaf:name ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty geo:lat;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty geo:long;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ] .
+
+geo:lat a owl:DatatypeProperty ;
+        rdfs:range xsd:float .
+
+
+geo:long a owl:DatatypeProperty ;
+        rdfs:range xsd:float .
+
+foaf:name a owl:DatatypeProperty ;
+        rdfs:range xsd:string .
+
+wot:offersInteraction a owl:ObjectProperty ;
+    rdfs:domain wot:Thing ;
+    rdfs:range wot:Property .
+
+wot:Property a owl:Class ;
+    rdfs:subClassOf [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty rdfs:label ;
+                        owl:onDataRange xsd:string ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ],
+                    [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:hasLog ;
+                        owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ],
+                    [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:hasLatestEntry ;
+                        owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ].
+
+wot:Action a owl:Class ;
+    rdfs:subClassOf [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty rdfs:label ;
+                        owl:onDataRange xsd:string ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ],
+                    [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:hasLog ;
+                        owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ],
+                    [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:hasLatestEntry ;
+                        owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ] .
+
+wot:Log a owl:Class ;
+        rdfs:subClassOf [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty wot:length ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ] .
+
+wot:Entry a owl:Class ;
+    rdfs:subClassOf [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:entryTimeStamp ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ] ,
+                    [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:value ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ].
+
+wot:System a owl:Class ;
+    rdfs:subClassOf [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty rdfs:label ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ],
+                    [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:description ;
+                        owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ] .
+
+wot:encapsulatesSystem a owl:ObjectProperty ;
+    rdfs:domain wot:Thing ;
+    rdfs:range wot:System .
+
+wot:Device a owl:Class ;
+    rdfs:subClassOf [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty rdfs:label ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ],
+                    [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:isPartOfSystem ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ] .
+
+wot:isPartOfSystem a owl:ObjectProperty ;
+    rdfs:domain wot:Device ;
+    rdfs:range wot:System .
+
+wot:hasDevice a owl:ObjectProperty ;
+    owl:inverseOf wot:isPartOfSystem .
+
+wot:Actuator a owl:Class ;
+    rdfs:subClassOf wot:Device ,
+                    [
+                        rdf:type owl:Restriction ;
+                        owl:onProperty wot:affects ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ],
+                    [
+                        a owl:Restriction ;
+                        owl:onProperty wot:consumes ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ] .
+
+wot:managesActuator a owl:ObjectProperty ;
+    rdfs:domain wot:Action ;
+    rdfs:range wot:Actuator .
+
+ssn:Sensor a owl:Class ;
+    rdfs:subClassOf [
+                        a owl:Restriction ;
+                        owl:onProperty wot:produces ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ] .
+
+ssn:SensingDevice rdfs:subClassOf ssn:Sensor, wot:Device .
+
+ssn:observes a owl:ObjectProperty ;
+    rdfs:domain ssn:Sensor ;
+    rdfs:range ssn:Property .
+
+wot:produces a owl:ObjectProperty ;
+    rdfs:domain ssn:Sensor ;
+    rdfs:range wot:ValueType .
+
+wot:consumes a owl:ObjectProperty ;
+    rdfs:domain wot:Actuator ;
+    rdfs:range wot:ValueType .
+
+wot:affects a owl:ObjectProperty ;
+    rdfs:domain wot:Actuator ;
+    rdfs:range ssn:Property .
+
+wot:observedBy a owl:ObjectProperty ;
+    rdfs:domain wot:Property ;
+    rdfs:range ssn:Sensor .
+
+wot:hasEntry a owl:ObjectProperty ;
+    rdfs:domain wot:Log ;
+    rdfs:range wot:Entry .
+
+wot:hasLatestEntry a owl:ObjectProperty ;
+    rdfs:range wot:Entry .
+
+wot:hasLog a owl:ObjectProperty ;
+    rdfs:range wot:Log .
+
+wot:exposesWebThing a owl:ObjectProperty ;
+    rdfs:domain wot:Service ;
+    rdfs:range wot:Thing .
+
+wot:length a owl:DatatypeProperty ;
+    rdfs:range xsd:long .
+
+wot:identifier a owl:DatatypeProperty ;
+    rdfs:range xsd:string .
+
+wot:name a owl:DatatypeProperty ;
+    rdfs:range xsd:string .
+
+wot:creationDate a owl:DatatypeProperty ;
+    rdfs:domain wot:Thing ;
+    rdfs:range xsd:dateTime .
+
+wot:description a owl:DatatypeProperty ;
+    rdfs:range xsd:string .
+
+wot:tag a owl:DatatypeProperty ;
+    rdfs:range rdfs:Literal .
+
+wot:value a owl:DatatypeProperty ;
+    rdfs:range rdfs:Resource .
+
+wot:entryTimeStamp a owl:DatatypeProperty ;
+    rdfs:domain wot:Entry ;
+    rdfs:range xsd:dateTime .
+
+wot:represents a owl:ObjectProperty ;
+    rdfs:domain wot:Property ;
+    rdfs:range ssn:Property .
+
+wot:units a owl:ObjectProperty ;
+    rdfs:domain wot:ValueType ;
+    rdfs:range wot:Unit .
+
+wot:ValueType a owl:Class ;
+    rdfs:subClassOf [
+                        a owl:Restriction ;
+                        owl:onProperty wot:units ;
+                        owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                    ] .
+
+wot:Float rdfs:subClassOf wot:ValueType .
+
+wot:String rdfs:subClassOf wot:ValueType .
+
+wot:Boolean rdfs:subClassOf wot:ValueType .
+
+wot:DateTime rdfs:subClassOf wot:ValueType .
+
+wot:Unit a owl:Class .
+
+wot:Adimensional a wot:Unit .

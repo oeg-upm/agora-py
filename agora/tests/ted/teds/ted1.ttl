@@ -1,0 +1,129 @@
+@prefix ted: <http://agora.org/ted#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix wot: <http://www.wot.org#> .
+
+
+_:ted1 a ted:TED ;
+       ted:describesEcosystem _:eco .
+
+_:eco a ted:Ecosystem ;
+      ted:includes _:td3 .
+
+_:td1 a wot:Thing ;
+      wot:location <http://es.dbpedia.org/resource/Madrid> ;
+      wot:onEndpoint [
+          wot:uri "http://localhost:5005/things/stars1"^^xsd:anyURI ;
+          wot:mediaType "application/json" ;
+          wot:mapping _:idMap, _:creationMap
+      ] ;
+      wot:offersInteraction [
+          a wot:Property ;
+          wot:onEndpoint [
+              wot:withHRef "properties/mag" ;
+              wot:mediaType "application/json" ;
+              wot:mapping _:labelMap, _:tsMap, _:latestMap, _:valueMap
+          ]
+      ] ,
+      [
+          a wot:Property ;
+          wot:onEndpoint [
+              wot:withHRef "properties/tamb" ;
+              wot:mediaType "application/json" ;
+              wot:mapping _:labelMap, _:tsMap, _:latestMap, _:valueMap
+          ]
+      ] ,
+      [
+          a wot:Property ;
+          wot:onEndpoint [
+              wot:withHRef "properties/freq" ;
+              wot:mediaType "application/json" ;
+              wot:mapping _:labelMap, _:tsMap, _:latestMap, _:valueMap
+          ]
+      ] ,
+      [
+          a wot:Property ;
+          wot:onEndpoint [
+              wot:withHRef "properties/tsky" ;
+              wot:mediaType "application/json" ;
+              wot:mapping _:labelMap, _:tsMap, _:latestMap, _:valueMap
+          ]
+      ] .
+
+_:td2 a wot:Thing ;
+      wot:identifier "stars2" ;
+      wot:location <http://es.dbpedia.org/resource/Zaragoza> ;
+      wot:offersInteraction [
+          a wot:Property ;
+          wot:hasLatestEntry [
+              a wot:Entry ;
+              wot:onEndpoint [
+                  wot:uri "http://localhost:5005/things/stars2/properties/tsky"^^xsd:anyURI ;
+                  wot:mediaType "application/json" ;
+                  wot:jsonPath "hasLatestEntry" ;
+                  wot:mapping _:tsMap , _:valueMap
+              ]
+          ] ;
+          wot:onEndpoint [
+              wot:uri "http://localhost:5005/things/stars2/properties/tsky"^^xsd:anyURI ;
+              wot:mediaType "application/json" ;
+              wot:mapping "label=http://www.w3.org/2000/01/rdf-schema#label"
+          ]
+      ] ,
+      [
+          a wot:Property ;
+          wot:onEndpoint [
+              wot:uri "http://localhost:5005/things/stars2/properties/tamb"^^xsd:anyURI ;
+              wot:mediaType "application/json" ;
+              wot:mapping _:labelMap, _:tsMap, _:latestMap, _:valueMap
+          ]
+      ] .
+
+_:td3 a wot:Thing ;
+      wot:location <http://es.dbpedia.org/resource/Madrid> ;
+      wot:onEndpoint [
+          wot:uri "http://localhost:5005/things/stars4"^^xsd:anyURI ;
+          wot:mediaType "application/json" ;
+          wot:mapping _:idMap , _:creationMap, _:hasWPMap
+      ] .
+
+
+_:idMap a wot:Mapping ;
+      wot:key "identifier" ;
+      wot:uri wot:identifier .
+
+_:labelMap a wot:Mapping ;
+      wot:key "label" ;
+      wot:uri rdfs:label .
+
+_:creationMap a wot:Mapping ;
+      wot:key "creationDate" ;
+      wot:uri wot:creationDate .
+
+_:hasWPMap a wot:Mapping ;
+      wot:key "hasWebThingProperty" ;
+      wot:uri wot:offersInteraction ;
+      wot:valueTransform [
+          a wot:Property ;
+          wot:onEndpoint [
+            wot:uri "$item" ;
+            wot:mediaType "application/json" ;
+            wot:mapping _:labelMap, _:tsMap, _:latestMap, _:valueMap
+          ]
+      ] .
+
+_:tsMap a wot:Mapping ;
+      wot:key "entryTimeStamp" ;
+      wot:uri wot:entryTimeStamp .
+
+_:valueMap a wot:Mapping ;
+      wot:key "value" ;
+      wot:uri wot:value .
+
+_:latestMap a wot:Mapping ;
+      wot:key "hasLatestEntry" ;
+      wot:uri wot:hasLatestEntry .

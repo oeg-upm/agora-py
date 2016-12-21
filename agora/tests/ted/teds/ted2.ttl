@@ -1,0 +1,28 @@
+@prefix ted: <http://agora.org/ted#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix wot: <http://www.wot.org#> .
+
+
+_:ted2 a ted:TED ;
+       ted:describesEcosystem _:eco .
+
+_:eco a ted:Ecosystem ;
+      ted:includes _:td1, _:td2 .
+
+_:td1 a wot:WebThing ;
+      wot:identifier "stars1" ;
+      wot:onEndpoint [
+          a wot:Endpoint ;
+          wot:uri "http://localhost:5005/things/stars1"^^xsd:anyURI ;
+          wot:mediaType "application/json"
+      ] ;
+      wot:hasWebThingProperty [
+          a wot:WebThingProperty ;
+          rdfs:label "mag" ;
+          wot:withHRef "properties/mag"
+      ] .

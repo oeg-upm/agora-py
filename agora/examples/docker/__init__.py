@@ -1,15 +1,14 @@
 from datetime import datetime
 
-import requests
-from agora.collector.wrapper import ResourceWrapper
+from docker import Client
 from rdflib import Graph
 from rdflib import Literal
 from rdflib import Namespace
 from rdflib import RDF
-from dateutil.parser import parse
 from rdflib import URIRef
 from rdflib import XSD
-from docker import Client
+
+from agora.collector.wrapper import ResourceWrapper
 
 DOCKER = Namespace('http://www.docker.com/vocabulary#')
 
