@@ -18,16 +18,31 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+
+import networkx as nx
+import requests
 import shortuuid
+from jsonpath_rw import parse
+from pyld import jsonld
+from rdflib import ConjunctiveGraph
+from rdflib import Graph
+from rdflib.namespace import Namespace, RDF
+from rdflib.term import Literal, URIRef, BNode
 
 from agora.collector.wrapper import ResourceWrapper
+from agora.engine.fountain import AbstractFountain
+from agora.engine.plan.agp import extend_uri
+from agora.ted.descriptor import Resource
 
 __author__ = 'Fernando Serena'
 
+TED_NS = Namespace('http://agora.org/ted#')
+WOT = Namespace('http://www.wot.org#')
+
 
 class TED(object):
-    def __init__(self):
-        self.__ecosystem = Ecosystem()
+    def __init__(self, graph):
+        self.__ecosystem = Ecosystem(graph)
 
     @property
     def ecosystem(self):
@@ -35,45 +50,226 @@ class TED(object):
 
 
 class Ecosystem(object):
-    def __init__(self):
-        self.__things = set([])
+    def __init__(self, graph):
+        # type: (Graph) -> None
+        try:
+            self.__node = list(graph.subjects(RDF.type, TED_NS.Ecosystem)).pop()
+        except IndexError:
+            raise ValueError('Ecosystem node not found')
+
+        self.__resources = set([])
+        self.__roots = set([])
+
+        root_nodes = set([])
+        for r_node in graph.objects(self.__node, TED_NS.includes):
+            resource = Resource(graph, r_node)
+            self.__resources.add(resource)
+            self.__roots.add(resource)
+            root_nodes.add(r_node)
+
+        for r_node in graph.subjects(predicate=WOT.onEndpoint):
+            if r_node not in root_nodes:
+                resource = Resource(graph, r_node)
+                self.__resources.add(resource)
 
     @property
     def things(self):
-        return iter(self.__things)
-
-
-class Thing(object):
-    def __init__(self):
-        self.__interactions = set([])
+        return frozenset(self.__resources)
 
     @property
-    def interactions(self):
-        return iter(self.__interactions)
+    def roots(self):
+        return frozenset(self.__roots)
 
 
-class Interaction(object):
-    def __init__(self):
-        self.__endpoints = set([])
+def get_ns(fountain):
+    g = Graph()
+    prefixes = fountain.prefixes
+    for prefix, ns in prefixes.items():
+        g.bind(prefix, ns)
+    return g.namespace_manager
+
+
+def apply_mappings(data, mappings, ns):
+    def value_mapping(k, data, mapping, ns):
+        if k in mapping and mapping[k].transform is not None:
+            return mapping[k].transform.attach(data)
+            # return data
+        else:
+            if isinstance(data, dict) or isinstance(data, list):
+                return apply_mapping(data, mapping, ns)
+            else:
+                return data
+
+    def apply_mapping(data, mapping, ns):
+        if isinstance(data, dict):
+            return {apply_mapping(k, mapping, ns): value_mapping(k, data[k], mapping, ns) for k in data}
+        elif isinstance(data, list):
+            return [apply_mapping(elm, mapping, ns) for elm in data]
+
+        if data in mapping:
+            return mapping[data].uri.n3(ns)
+        return data
+
+    m_dict = {m.key: m for m in mappings}
+    mapped = apply_mapping(data, m_dict, ns)
+    return mapped
+
+
+def ld_triples(ld, g=None):
+    bid_map = {}
+
+    def parse_term(term):
+        if term['type'] == 'IRI':
+            return URIRef(term['value'])
+        elif term['type'] == 'literal':
+            datatype = term.get('datatype', None)
+            return Literal(term['value'], datatype=URIRef(datatype))
+        else:
+            bid = term['value'].split(':')[1]
+            if bid not in bid_map:
+                bid_map[bid] = shortuuid.uuid()
+            return BNode(bid_map[bid])
+
+    if g is None:
+        g = Graph()
+    norm = jsonld.normalize(ld)
+    def_graph = norm.get('@default', [])
+    for triple in def_graph:
+        subject = parse_term(triple['subject'])
+        predicate = parse_term(triple['predicate'])
+        object = parse_term(triple['object'])
+        g.add((subject, predicate, object))
+
+    return g
+
+
+class Gateway(object):
+    def __init__(self, ted, fountain):
+        # type: (TED) -> None
+        self.__ted = ted
+        self.__fountain = fountain
+        self.__ns = get_ns(self.__fountain)
+        self.__seeds = set([])
+        self.__wrapper = ResourceWrapper()
+        self.__rdict = {unicode(t.node.toPython()): t for t in ted.ecosystem.things}
+        self.__wrapper.intercept('/<tid>')(self.describe_resource)
+        self.__network = nx.DiGraph()
+
+        for tid, resource in self.__rdict.items():
+            self.__network.add_node(resource.node)
+            uri = URIRef(self.__wrapper.url_for('describe_resource', tid=tid))
+            if resource in ted.ecosystem.roots:
+                for t in resource.types:
+                    self.__seeds.add((uri, t.n3(self.__ns)))
+            parents = filter(lambda other: list(other.graph.triples((None, None, resource.node))),
+                             self.__rdict.values())
+            for parent in parents:
+                self.__network.add_edge(parent.node, resource.node)
+
+        print self.__network.edges()
 
     @property
-    def endpoints(self):
-        return iter(self.__endpoints)
+    def seeds(self):
+        return frozenset(self.__seeds)
 
+    @property
+    def base(self):
+        return self.__wrapper.base
 
-class Endpoint(object):
-    def __init__(self):
-        pass
+    def load(self, uri, format=None):
+        return self.__wrapper.load(uri)
 
+    def compose_endpoints(self, thing):
+        node = thing.node
+        for base_e in thing.base:
+            if base_e.uri is None:
+                for pred in self.__network.predecessors(node):
+                    pred_thing = self.__rdict[pred.toPython()]
+                    for pred_e in self.compose_endpoints(pred_thing):
+                        yield pred_e + base_e
+            else:
+                yield base_e
 
-def create_wrapper(ted):
-    # type: (TED) -> ResourceWrapper
-    wrapper = ResourceWrapper()
+    def describe_resource(self, tid, **kwargs):
+        resource = self.__rdict[tid]
 
-    i = 0
-    for thing in ted.ecosystem.things:
-        for interaction in thing.interactions:
-            print interaction
-            wrapper.intercept('/<{}>'.format(i))
+        g = ConjunctiveGraph()
+        try:
+            r_uri = self.__wrapper.url_for('describe_resource', tid=tid)
+            if kwargs:
+                r_uri = '{}?{}'.format(r_uri, '&'.join(['{}={}'.format(k, kwargs[k]) for k in kwargs]))
+            r_uri = URIRef(r_uri)
+            for s, p, o in resource.graph:
+                if s == resource.node:
+                    s = r_uri
+                if isinstance(o, BNode) and o.toPython() in self.__rdict:
+                    o = URIRef(self.__wrapper.url_for('describe_resource', tid=o.toPython()))
+                g.add((s, p, o))
+            if resource.base:
+                for e in self.compose_endpoints(resource):
+                    uri = e.uri
+                    for v in filter(lambda x: x in uri, kwargs):
+                        uri = uri.replace(v, kwargs[v])
+                    response = requests.get(uri, headers={'Accept': e.media})
+                    data = response.json()
+                    if e.path is not None:
+                        jsonpath_expr = parse(e.path)
+                        data = [match.value for match in jsonpath_expr.find(data)]
+                        if len(data) == 1:
+                            data = data.pop()
+                    ld = self.enrich(r_uri, apply_mappings(data, e.mappings, self.__ns), resource.types,
+                                     self.__fountain, ns=self.__ns)
+                    ld_triples(ld, g)
+        except Exception as e:
+            print e.message
+        return g, {}
 
-    return wrapper
+    def url_for(self, tid):
+        return self.__wrapper.url_for('describe_resource', tid=tid)
+
+    def enrich(self, uri, data, types, fountain, ns=None, context=None):
+        # type: (URIRef, dict, list, AbstractFountain) -> dict
+        if context is None:
+            context = {}
+
+        if ns is None:
+            ns = get_ns(fountain)
+
+        j_types = []
+        data['@id'] = uri
+        data['@type'] = j_types
+        prefixes = dict(ns.graph.namespaces())
+        for t in types:
+            if isinstance(t, URIRef):
+                t_n3 = t.n3(ns)
+            else:
+                t_n3 = t
+            props = fountain.get_type(t_n3)['properties']
+
+            short_type = t_n3.split(':')[1]
+            context[short_type] = {'@id': str(extend_uri(t_n3, prefixes)), '@type': '@id'}
+            j_types.append(short_type)
+            for p_n3 in data:
+                if p_n3 in props:
+                    p = extend_uri(p_n3, prefixes)
+                    pdict = fountain.get_property(p_n3)
+                    if pdict['type'] == 'data':
+                        range = pdict['range'][0]
+                        if range == 'rdfs:Resource':
+                            datatype = Literal(data[p_n3]).datatype
+                        else:
+                            datatype = extend_uri(range, prefixes)
+                        jp = {'@type': datatype, '@id': p}
+                    else:
+                        jp = {'@type': '@id', '@id': p}
+
+                    context[p_n3] = jp
+                    p_n3_data = data[p_n3]
+                    if isinstance(p_n3_data, dict):
+                        sub = self.enrich(BNode(shortuuid.uuid()).n3(ns), p_n3_data, pdict['range'], fountain, ns,
+                                          context)
+                        data[p_n3] = sub['@graph']
+                    elif hasattr(p_n3_data, '__call__'):
+                        data[p_n3] = p_n3_data(key=p_n3, context=context, uri_provider=self.url_for)
+
+        return {'@context': context, '@graph': data}

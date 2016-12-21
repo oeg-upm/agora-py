@@ -11,3 +11,7 @@ flask
 Flask-Negotiate
 requests
 python-dateutil
+nose
+pyld
+rdflib-jsonld
+jsonpath-rw

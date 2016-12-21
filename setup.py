@@ -40,7 +40,7 @@ setup(
     download_url="https://github.com/fserena/agora-py/tarball/{}".format(metadata['version']),
     packages=find_packages(exclude=['ez_setup', 'examples', 'tests']),
     install_requires=['requests', 'redislite', 'flask', 'shortuuid', 'Flask-Negotiate', 'redis', 'hiredis', 'rdflib',
-                      'networkx', 'futures', 'rfc3987', 'python-dateutil'],
+                      'networkx', 'futures', 'rfc3987', 'python-dateutil', 'pyld', 'rdflib-jsonld', 'jsonpath-rw'],
     classifiers=[],
     package_dir={'agora.engine': 'agora/engine'},
     package_data={'agora.engine': ['metadata.json']},
