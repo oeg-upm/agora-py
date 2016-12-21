@@ -405,7 +405,10 @@ class PlanExecutor(object):
         def __open_graph(gid, loader, format):
             if cache is None:
                 result = loader(gid, format)
-                if not isinstance(result, bool):
+                if result is None and loader != http_get:
+                    result = http_get(gid, format)
+                if isinstance(result, tuple):
+                    # not isinstance(result, bool):
                     content, headers = result
                     if not isinstance(content, Graph):
                         g = ConjunctiveGraph()
@@ -727,7 +730,6 @@ class PlanExecutor(object):
             thread.start()
 
             while not self.__completed or fragment_queue.not_empty:
-
                 try:
                     (t, s, p, o) = fragment_queue.get(timeout=0.001)
                     fragment_queue.task_done()

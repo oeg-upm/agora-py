@@ -23,7 +23,7 @@ import logging
 import traceback
 from Queue import Empty, Full
 from StringIO import StringIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from multiprocessing import Queue
 from threading import Thread, Event, Lock
 
@@ -32,11 +32,7 @@ import redis
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
 from rdflib import ConjunctiveGraph, Graph
-from rdflib import Literal
-from rdflib import RDF
-from rdflib import RDFS
-from rdflib import URIRef
-from rdflib import Variable
+from rdflib import Literal, RDF, RDFS, URIRef, Variable
 from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.parser import Query
 from rdflib.plugins.sparql.parser import expandUnicodeEscapes
@@ -249,10 +245,9 @@ class Fragment(object):
                 traceback.print_exc()
 
         if self.stored:
-            with self.lock:
-                for c in self.__tp_map:
-                    for s, p, o in self.triples.get_context(str((self.fid, self.__tp_map[c]))):
-                        yield self.__tp_map[c], s, p, o
+            for c in self.__tp_map:
+                for s, p, o in self.triples.get_context(str((self.fid, self.__tp_map[c]))):
+                    yield self.__tp_map[c], s, p, o
         else:
             try:
                 until = calendar.timegm(datetime.utcnow().timetuple())
@@ -324,20 +319,19 @@ class Fragment(object):
 
     def remove(self):
         # type: () -> None
-
         # Clear stream
         self.stream.clear()
+
+        # Remove graph contexts
+        if self.__tp_map:
+            for tp in self.__tp_map.values():
+                self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
 
         # Remove fragment keys in kv
         with self.kv.pipeline() as pipe:
             for fragment_key in self.kv.keys('{}*{}*'.format(self.__fragments_key, self.fid)):
                 pipe.delete(fragment_key)
             pipe.execute()
-
-        # Remove graph contexts
-        if self.__tp_map:
-            for tp in self.__tp_map.values():
-                self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
 
     def mapping(self, agp, filters):
         # type: (AGP, dict) -> dict
@@ -354,20 +348,31 @@ class Fragment(object):
 class FragmentIndex(object):
     def __init__(self, planner, key_prefix='', kv=None, triples=None):
         # type: (AbstractPlanner, str, redis.StrictRedis) -> None
+        self.__orphaned = {}
         self.__key_prefix = key_prefix
         self.__fragments_key = '{}:fragments'.format(key_prefix)
         self.kv = kv if kv is not None else get_kv()
         self.triples = triples if triples is not None else get_triple_store()
         self.__planner = planner
+        self.__lock = Lock()
         # Load fragments from kv
         self.__fragments = dict(self.__load_fragments())
-        self.__lock = Lock()
 
     def __load_fragments(self):
         fids = self.kv.smembers(self.__fragments_key)
+        orph_fids = self.kv.smembers('{}:orph'.format(self.__fragments_key))
+
         for fragment_id in fids:
             fragment = Fragment.load(self.kv, self.triples, self.__fragments_key, fragment_id,
                                      prefixes=self.__planner.fountain.prefixes)
+
+            if fragment_id in orph_fids:
+                self.kv.srem(self.__fragments_key, fragment_id)
+                self.kv.srem('{}:orph'.format(self.__fragments_key), fragment_id)
+                if fragment is not None:
+                    fragment.remove()
+                continue
+
             if fragment is not None:
                 yield (fragment_id, fragment)
 
@@ -375,7 +380,8 @@ class FragmentIndex(object):
         # type: (AGP, bool) -> dict
         mapping = None
         with self.__lock:
-            for fragment_id in sorted(self.__fragments, key=lambda x: abs(
+            active_fragments = filter(lambda x: x not in self.__orphaned, self.__fragments.keys())
+            for fragment_id in sorted(active_fragments, key=lambda x: abs(
                             len(self.__fragments[x].filters) - len(filters)), reverse=False):
                 fragment = self.__fragments[fragment_id]
                 mapping = fragment.mapping(agp, filters)
@@ -385,8 +391,8 @@ class FragmentIndex(object):
 
             if general and mapping is None:
                 general, filter_mapping = _generalize_agp(agp, prefixes=self.__planner.fountain.prefixes)
-                for fragment_id, fragment in self.__fragments.items():
-                    mapping = fragment.mapping(general, {})
+                for fragment_id in active_fragments:
+                    mapping = self.__fragments[fragment_id].mapping(general, {})
                     if mapping:
                         break
 
@@ -415,12 +421,28 @@ class FragmentIndex(object):
     def get_fragment_stream(self, fid, until=None):
         return FragmentStream(self.kv, fid).get(until)
 
+    def add_orphaned(self, fid):
+        self.__orphaned[fid] = datetime.utcnow() + timedelta(seconds=10)
+
+    @property
+    def orphaned(self):
+        return self.__orphaned
+
     def remove(self, fid):
         with self.__lock:
             fragment = self.__fragments[fid]
-            del self.__fragments[fid]
-            self.kv.srem(self.__fragments_key, fid)
-            fragment.remove()
+            if fid not in self.__orphaned:
+                log.info('Discarding fragment: {}'.format(fragment.fid))
+                self.add_orphaned(fid)
+                self.kv.sadd('{}:orph'.format(self.__fragments_key), fid)
+            else:
+                now = datetime.utcnow()
+                if now > self.__orphaned[fid]:
+                    log.info('Removing fragment: {}'.format(fragment.fid))
+                    self.kv.srem(self.__fragments_key, fid)
+                    self.kv.srem('{}:orph'.format(self.__fragments_key), fid)
+                    fragment.remove()
+                    del self.__fragments[fid]
 
 
 class Scholar(Collector):
@@ -451,9 +473,7 @@ class Scholar(Collector):
             for fragment in self.__index.fragments.values():
                 if not fragment.updated and not fragment.collecting:
                     if not fragment.newcomer:
-                        log.info('Discarding fragment: {}'.format(fragment.fid))
                         self.__index.remove(fragment.fid)
-
                     else:
                         collector = Collector(self.planner, self.cache)
                         collector.loader = self.loader
@@ -566,6 +586,10 @@ class Scholar(Collector):
             filters = {}
 
         var_filters = {}
+        ft = FilterTree()
+        in_filter_path = {}
+        candidates = {}
+
         if filters:
             for v in filters:
                 var_filters[v] = []
@@ -575,29 +599,26 @@ class Scholar(Collector):
                     query = translateQuery(parse)
                     var_filters[v].append(query.algebra.p.p)
 
-        ft = FilterTree()
-        in_filter_path = {}
-        candidates = {}
-        mapped_agp = [self.__map_tp(tp, m_vars) for tp in agp]
-        for tp in mapped_agp:
-            ft.add_tp(tp)
-            if tp.s in filters or tp.s in m_filters:
-                ft.add_variable(tp.s)
-            if tp.o in filters or tp.o in m_filters:
-                ft.add_variable(tp.o)
+            mapped_agp = [self.__map_tp(tp, m_vars) for tp in agp]
+            for tp in mapped_agp:
+                ft.add_tp(tp)
+                if tp.s in filters or tp.s in m_filters:
+                    ft.add_variable(tp.s)
+                if tp.o in filters or tp.o in m_filters:
+                    ft.add_variable(tp.o)
 
-        ugraph = ft.graph.to_undirected()
+            ugraph = ft.graph.to_undirected()
 
-        for tp in mapped_agp:
-            if tp.s not in in_filter_path:
-                in_filter_path[tp.s] = False
-                for v in ft.variables:
-                    try:
-                        nx.has_path(ugraph, tp.s, v)
-                        in_filter_path[tp.s] = True
-                        break
-                    except:
-                        pass
+            for tp in mapped_agp:
+                if tp.s not in in_filter_path:
+                    in_filter_path[tp.s] = False
+                    for v in ft.variables:
+                        try:
+                            nx.has_path(ugraph, tp.s, v)
+                            in_filter_path[tp.s] = True
+                            break
+                        except:
+                            pass
 
         for c, s, p, o in generator:
             tp = self.__map_tp(c, m_vars)

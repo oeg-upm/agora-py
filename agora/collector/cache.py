@@ -21,22 +21,25 @@
 """
 
 import calendar
+import email.utils as eut
 import logging
 import math
 import shutil
 import traceback
-from datetime import datetime as dt, timedelta as delta
+from datetime import datetime as dt, timedelta as delta, datetime
 from threading import Thread, Lock
 from time import sleep
 
 import shortuuid
-from agora.collector.execution import parse_rdf
-from agora.engine.utils.graph import get_triple_store
-from agora.engine.utils.kv import get_kv
 from concurrent.futures import ThreadPoolExecutor
 from rdflib import ConjunctiveGraph
 from rdflib.graph import Graph
 from werkzeug.http import parse_dict_header
+
+from agora.collector.execution import parse_rdf
+from agora.collector.http import http_get
+from agora.engine.utils.graph import get_triple_store
+from agora.engine.utils.kv import get_kv
 
 __author__ = 'Fernando Serena'
 
@@ -190,6 +193,9 @@ class RedisCache(object):
 
                 log.debug('Caching {}'.format(gid))
                 response = loader(gid, format)
+                if response is None and loader != http_get:
+                    response = http_get(gid, format)
+
                 if isinstance(response, bool):
                     return response
 
@@ -205,6 +211,11 @@ class RedisCache(object):
                 if cache_control is not None:
                     cache_dict = parse_dict_header(cache_control)
                     ttl = int(math.ceil(float(cache_dict.get('max-age', ttl))))
+                else:
+                    expires = headers.get('expires', None)
+                    if expires is not None:
+                        exp_dt = dt(*eut.parsedate(expires)[:6])
+                        ttl = int(math.ceil((exp_dt - dt.now()).total_seconds()))
 
                 # Let's create a new one
                 p.set('{}:{}:uri'.format(self.__key_prefix, uuid), gid)
