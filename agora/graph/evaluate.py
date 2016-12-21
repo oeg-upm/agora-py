@@ -48,8 +48,9 @@ from rdflib.plugins.sparql.sparql import (
     QueryContext, AlreadyBound, FrozenBindings, SPARQLError)
 
 
-def collect_bgp_fragment(graph, bgp):
-    gen = graph.gen(bgp)
+def collect_bgp_fragment(ctx, bgp):
+    graph = ctx.graph
+    gen = graph.gen(bgp, filters=ctx.filters)
     if gen is not None:
         try:
             while gen.next():
@@ -105,7 +106,7 @@ def evalBGP(ctx, bgp):
         for x in incremental_eval_bgp(ctx, bgp):
             yield x
     else:
-        collect_bgp_fragment(ctx.graph, bgp)
+        collect_bgp_fragment(ctx, bgp)
         for x in __evalBGP(ctx, bgp):
             yield x
 
