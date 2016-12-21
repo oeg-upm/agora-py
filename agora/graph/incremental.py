@@ -18,8 +18,17 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+
+import networkx as nx
+from rdflib import BNode
+from rdflib import Graph
+from rdflib import RDF
 from rdflib import Variable
 from rdflib.plugins.sparql.sparql import AlreadyBound
+from rdflib.plugins.sparql.sparql import QueryContext
+
+from agora.engine.plan import AGP
+from agora.engine.plan.graph import AGORA
 
 __author__ = 'Fernando Serena'
 
@@ -36,7 +45,9 @@ class Context(object):
         return self.map.get(item, None)
 
     def __eq__(self, other):
-        return self.map == other.map
+        if isinstance(other, Context):
+            return self.map == other.map
+        return False
 
     def __contains__(self, item):
         return item in self.map
@@ -73,7 +84,7 @@ class ContextCollection(set):
 
 
 def __base_generator(agp, ctx, fragment):
-    # type: (AGP, AgoraContext, iter) -> iter
+    # type: (AGP, QueryContext, iter) -> iter
     tp_single_vars = [(tp, tp.s if isinstance(tp.s, Variable) else tp.o) for tp in agp if
                       isinstance(tp.s, Variable) != isinstance(tp.o, Variable)]
 
@@ -123,108 +134,44 @@ def __exploit(c1, c2):
         return c
 
 
-def __compose(c, intermediate):
-    # type: (Context, iter) -> iter
-    delta = ContextCollection()
-    for qc in intermediate:
-        if c != qc:
-            n = __exploit(c, qc)
-            if n is not None and n not in delta and n not in intermediate:
-                delta.add(n)
-    return __reduce_collection(delta)
-
-
-def __equal_intersection(c1, c2):
+def __joins(c, x):
     # type: (Context, Context) -> bool
-    return all([c1[k] == c2[k] for k in set(c1.map.keys()).intersection(set(c2.map.keys()))])
-
-
-def __no_containment(c1, c2):
-    # type: (Context, Context) -> bool
-    return not c1.issubset(c2) and not c2.issubset(c1)
-
-
-def __part_of(c1, c2):
-    # type: (Context, Context) -> bool
-    return c1.issubset(c2)
-
-
-def __has_difference(c1, c2):
-    # type: (Context, Context) -> bool
-    return bool(len(set(__diff(c1, c2))))
-
-
-def __select_candidates(c, col):
-    # type: (Context, ContextCollection) -> set
-    candidates = filter(lambda x: __no_containment(x, c), col)
-    candidates = filter(lambda x: __equal_intersection(c, x), candidates)
-    candidates = filter(lambda x: __has_difference(c, x), candidates)
-    return set(candidates)
-
-
-def __exploit_collection(col):
-    # type: (set, ContextCollection, set) -> iter
-    pairs = set([])
-    delta = ContextCollection()
-    acum = ContextCollection()
-    for r in col:
-        candidates = set(__select_candidates(r, acum))
-        candidates = filter(lambda x: (x, r) not in pairs, candidates)
-        for cand in candidates:
-            pairs.add((r, cand))
-            new = __exploit(r, cand)
-            if new is not None:
-                if new not in delta:
-                    delta.add(new)
-        acum.add(r)
-
-        if r not in candidates and r not in delta:
-            delta.add(r)
-
-    return __reduce_collection(delta)
-
-
-def __joins_with(tp, c, x):
-    # type: (TP, Context, Context) -> bool
     any = False
     len_c = len(c.variables)
-    if len_c > 1 and len(x.variables) > 1:
-        if len_c - len(c.variables.intersection(x.variables)) == 1:
-            if tp.s in x.variables:
-                any = True
-                if c[tp.s] != x[tp.s]:
-                    return False
-            if tp.o in x.variables:
-                any = True
-                if c[tp.o] != x[tp.o]:
-                    return False
+    intersection = c.variables.intersection(x.variables)
+    if len_c - len(intersection) >= 1:
+        any = True
+        for v in intersection:
+            if c[v] != x[v]:
+                return False
 
     return any
 
 
-def __reduce_collection(col):
-    # type: (iter) -> iter
-    for c in col:
-        unique = True
-        for c2 in col:
-            if c != c2 and c.issubset(c2):
-                unique = False
-                break
-        if unique:
-            yield c
+def __eval_delta(c, graph, roots, variables):
+    # type: (Context, nx.DiGraph) -> iter
 
+    def filter_successor(x):
+        return x != c and __joins(c, x) and not set.intersection(set(nx.descendants(graph, x)),
+                                                                 set(nx.descendants(graph, c)))
 
-def __eval_delta(c, tp, intermediate):
-    # type: (Context, TP, iter) -> iter
-    if isinstance(tp.o, Variable) and isinstance(tp.s, Variable):
-        candidates = filter(lambda x: __joins_with(tp, c, x), intermediate)
-        reduce_candidates = set(__reduce_collection(candidates))
-        compose = set(__compose(c, reduce_candidates))
-        exploit = list(__exploit_collection(compose))
-        for r in exploit:
-            yield r
+    solutions = ContextCollection()
 
-    yield c
+    root_candidates = reduce(lambda x, y: set.union(x, set(graph.successors(y))), roots, set())
+    for root in root_candidates:
+        if filter_successor(root):
+            inter = __exploit(root, c)
+            if inter is not None:
+                graph.add_edge(root, inter)
+                graph.add_edge(c, inter)
+                if len(inter.variables) == len(variables):
+                    solutions.add(inter)
+                else:
+                    pred = filter(lambda x: graph.out_degree(x) > 1, graph.predecessors(inter))
+                    for s in __eval_delta(inter, graph, pred, variables):
+                        solutions.add(s)
+
+    return solutions
 
 
 def __query_context(ctx, c):
@@ -238,18 +185,58 @@ def __query_context(ctx, c):
     return q
 
 
+def print_ancestors(graph, node, source=None, g=None, bids=None, cids=None):
+    if g is None:
+        g = Graph()
+    if bids is None:
+        bids = {}
+    if cids is None:
+        cids = {}
+
+    if isinstance(node, Variable):
+        gn = BNode(node.toPython())
+        g.add((gn, RDF.type, AGORA.Variable))
+    else:
+        if node not in cids:
+            cids[node] = BNode('c{}'.format(len(cids)))
+        gn = cids[node]
+        for v in node.variables:
+            bid_tuple = (v, node[v])
+            if bid_tuple not in bids:
+                bids[bid_tuple] = BNode('b' + str(len(bids)))
+            bn = bids[bid_tuple]
+            g.add((gn, AGORA.hasBinding, bn))
+            g.set((bn, RDF.type, AGORA.Binding))
+            g.set((bn, AGORA.forVariable, BNode(v.toPython())))
+            g.set((bn, AGORA.withValue, node[v]))
+
+        for pred in graph.predecessors(node):
+            print_ancestors(graph, pred, source=gn, g=g, bids=bids, cids=cids)
+
+    if source is not None:
+        g.add((source, AGORA.source, gn))
+    else:
+        g.add((gn, RDF.type, AGORA.Solution))
+
+    return g
+
+
 def incremental_eval_bgp(ctx, bgp):
     # type: (QueryContext, iter) -> iter
     fragment_generator = ctx.graph.gen(bgp, filters=ctx.filters)
     if fragment_generator is not None:
+        dgraph = nx.DiGraph()
         agp = ctx.graph.build_agp(bgp)
 
         variables = set([v for v in agp.wire.nodes() if isinstance(v, Variable)])
-        contexts = ContextCollection()
+        dgraph.add_nodes_from(variables)
+
         for c, tp in __base_generator(agp, ctx, fragment_generator):
-            for inter in __eval_delta(c, tp, contexts):
-                if inter not in contexts:
-                    if all([inter[k] is not None for k in variables]):
-                        yield __query_context(ctx, inter).solution()
-                    else:
-                        contexts.add(inter)
+            [dgraph.add_edge(v, c) for v in c.variables]
+
+            if len(c.variables) == len(variables):
+                yield __query_context(ctx, c).solution()
+            else:
+                if isinstance(tp.o, Variable) and isinstance(tp.s, Variable):
+                    for solution in __eval_delta(c, dgraph, c.variables, variables):
+                        yield __query_context(ctx, solution).solution()
