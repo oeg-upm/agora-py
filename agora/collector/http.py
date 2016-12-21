@@ -60,4 +60,4 @@ def http_get(uri, format):
     if response.status_code == 200:
         return StringIO(response.content), response.headers
     else:
-        return True
+        return response.status_code != 406
