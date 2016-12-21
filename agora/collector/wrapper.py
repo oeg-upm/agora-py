@@ -20,11 +20,17 @@
 """
 from urlparse import urlparse, urljoin
 
+import shortuuid
+from rdflib import Graph
 from werkzeug.routing import Rule, Map
+
+__author__ = 'Fernando Serena'
 
 
 class ResourceWrapper(object):
-    def __init__(self, server_name, url_scheme, server_port=None):
+    def __init__(self, server_name=None, url_scheme='http', server_port=None):
+        if server_name is None:
+            server_name = shortuuid.uuid().lower()
         if server_port is None:
             server_port = '80' if url_scheme == 'http' else '443'
         else:
@@ -59,7 +65,9 @@ class ResourceWrapper(object):
         parse = urlparse(uri, allow_fragments=True)
         if parse.hostname == self.__environ['SERVER_NAME'] and parse.scheme == self.__environ['wsgi.url_scheme'] and (
                         parse.port == self.__environ['SERVER_PORT'] or (parse.port is None)):
-            return self.__adapter.match(parse.path)
+            qs = filter(lambda x: x, parse.query.split('&'))
+            query_dict = {x[0]: x[1] for x in [x.split('=') for x in qs]}
+            return self.__adapter.match(parse.path), query_dict
         raise ValueError
 
     def intercept(self, rule):
@@ -75,7 +83,9 @@ class ResourceWrapper(object):
 
     def load(self, uri, format=None):
         try:
-            f, kwargs = self.__match(uri)
+            match, query = self.__match(uri)
+            f, kwargs = match
+            kwargs.update(query)
             return f(**kwargs)
         except ValueError:
             return
