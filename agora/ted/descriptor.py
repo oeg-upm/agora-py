@@ -18,6 +18,7 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+import base64
 import itertools
 from abc import abstractmethod
 from urlparse import urljoin
@@ -27,6 +28,8 @@ from rdflib import Graph
 from rdflib import Namespace
 from rdflib import RDF
 from rdflib.term import Node, BNode
+
+from agora.ted.evaluate import find_params
 
 __author__ = 'Fernando Serena'
 
@@ -58,21 +61,33 @@ def describe(graph, elm, filters=[], trace=None):
 
 class Resource(object):
     def __init__(self, graph, node):
-        # type: (Graph, Node) -> None
+        # type: (Graph, any) -> None
         self.__node = node
         self.__graph = ConjunctiveGraph()
         self.__types = set([])
+        self.__vars = set([])
 
-        # for t in describe(graph, node, filters=[WOT.onEndpoint]):
         for t in describe(graph, node):
             self.__graph.add(t)
 
         self.__types = set(self.__graph.objects(self.__node, RDF.type))
+        try:
+            self.__id = list(self.__graph.objects(self.__node, WOT.identifier)).pop().toPython()
+        except IndexError:
+            self.__id = self.__node.toPython()
 
         self._endpoints = set([])
         for e_node in self.__graph.objects(self.__node, WOT.onEndpoint):
             for endpoint in Endpoint.from_graph(self.__graph, e_node):
                 self._endpoints.add(endpoint)
+                ref = endpoint.href or endpoint.href
+                for param in find_params(str(ref)):
+                    self.__vars.add(param)
+
+        self._includes = set([])
+        for i_node in self.__graph.objects(self.__node, WOT.includes):
+            include = Include.from_graph(self.__graph, i_node)
+            self._includes.add(include)
 
     @property
     def base(self):
@@ -83,6 +98,10 @@ class Resource(object):
         return frozenset(self.__types)
 
     @property
+    def includes(self):
+        return frozenset(self._includes)
+
+    @property
     def graph(self):
         return self.__graph
 
@@ -90,11 +109,37 @@ class Resource(object):
     def node(self):
         return self.__node
 
+    @property
+    def id(self):
+        return self.__id
+
+    @property
+    def vars(self):
+        return frozenset(self.__vars)
+
+
+class Include(object):
+    def __init__(self):
+        self.predicate = None
+        self.object = None
+
+    @staticmethod
+    def from_graph(graph, node):
+        include = Include()
+
+        try:
+            include.predicate = list(graph.objects(node, WOT.predicate)).pop()
+            include.object = list(graph.objects(node, WOT.object)).pop()
+        except IndexError:
+            pass
+
+        return include
+
 
 class Endpoint(object):
     def __init__(self):
-        self.uri = None
         self.href = None
+        self.whref = None
         self.path = None
         self.mappings = set([])
         self.media = 'application/json'
@@ -120,11 +165,11 @@ class Endpoint(object):
             pass
 
         try:
-            endpoint.uri = list(graph.objects(node, WOT.uri)).pop()
+            endpoint.href = list(graph.objects(node, WOT.href)).pop()
             yield endpoint
         except IndexError:
             for href in graph.objects(node, WOT.withHRef):
-                endpoint.href = href
+                endpoint.whref = href
                 yield endpoint
 
     def __add__(self, other):
@@ -132,16 +177,16 @@ class Endpoint(object):
         if isinstance(other, Endpoint):
             endpoint.mappings.update(other.mappings)
             endpoint.media = other.media
-            other = other.href if other.uri is None else other.uri
+            other = other.whref if other.href is None else other.href
 
-        endpoint.uri = urljoin(self.uri + '/', other, allow_fragments=True)
+        endpoint.href = urljoin(self.href + '/', other, allow_fragments=True)
         return endpoint
 
 
 class Mapping(object):
     def __init__(self):
         self.key = None
-        self.uri = None
+        self.predicate = None
         self.transform = None
 
     @staticmethod
@@ -149,8 +194,8 @@ class Mapping(object):
         mapping = Mapping()
 
         try:
+            mapping.predicate = list(graph.objects(node, WOT.predicate)).pop()
             mapping.key = list(graph.objects(node, WOT.key)).pop().toPython()
-            mapping.uri = list(graph.objects(node, WOT.uri)).pop()
         except IndexError:
             pass
 
@@ -174,11 +219,21 @@ class Transform(object):
     def attach(self, data):
         def wrapper(*args, **kwargs):
             return self.apply(data, *args, **kwargs)
+
         return wrapper
 
     @abstractmethod
     def apply(self, data, *args, **kwargs):
         pass
+
+
+def encode_rdict(rd):
+    sorted_keys = sorted(rd.keys())
+    sorted_fields = []
+    for k in sorted_keys:
+        sorted_fields.append('"%s": "%s"' % (str(k), str(rd[k])))
+    str_rd = '{' + ','.join(sorted_fields) + '}'
+    return base64.b64encode(str_rd)
 
 
 class ResourceTransform(Transform):
@@ -193,11 +248,17 @@ class ResourceTransform(Transform):
         return transform
 
     def apply(self, data, *args, **kwargs):
+        def merge(x, y):
+            z = y.copy()
+            z.update(x)
+            return z
+
         if not isinstance(data, dict):
             uri_provider = kwargs['uri_provider']
-            resource_uri = uri_provider(self.resource_node.toPython())
             if not isinstance(data, list):
                 data = [data]
-            return ['{}?$item={}'.format(resource_uri, v) for v in data]
+            parent_item = kwargs.get('$item', None)
+            base_rdict = {"$parent": parent_item} if parent_item is not None else {}
+            res = [uri_provider(self.resource_node, encode_rdict(merge({"$item": v}, base_rdict))) for v in data]
+            return res  # [:min(3, len(res))]
         return data
-

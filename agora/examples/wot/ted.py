@@ -61,8 +61,6 @@ q11 = """SELECT * WHERE { [] wot:identifier ?name ;
 q12 = """SELECT DISTINCT * WHERE {
                             ?w wot:identifier ?name .
                             ?w wot:offersInteraction ?i .
-                            ?w wot:location ?loc .
-                            ?loc foaf:name ?place .
                             ?i rdfs:label ?l .
                             ?i wot:hasLatestEntry ?e .
                             ?e wot:value ?v .
@@ -75,14 +73,14 @@ q13 = """SELECT DISTINCT * WHERE {
                             }"""
 
 
-scholar = Scholar(agora.planner, cache=cache, loader=gw.load)
+# scholar = Scholar(agora.planner, cache=cache, loader=gw.load)
 
 elapsed = []
 
-for query in [q12] * 10:
+for query in [q12]:
     pre = datetime.now()
     n = 0
-    for row in agora.query(query, collector=scholar, incremental=True):
+    for row in agora.query(query, loader=gw.load):
         print '[', (datetime.now() - pre).total_seconds(), '] solution:',
         for label in row.labels:
             print label + '=' + str(row[label]),

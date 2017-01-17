@@ -20,6 +20,7 @@
 """
 import json
 import logging
+import traceback
 from datetime import datetime
 from time import sleep
 
@@ -100,6 +101,7 @@ def build(agora, server=None, import_name=__name__, query_function=None):
             gen = query_function(query, incremental=incremental)
             return gen_results()
         except Exception, e:
+            traceback.print_exc()
             raise APIError(e.message)
 
     @server.route('/')

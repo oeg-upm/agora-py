@@ -35,6 +35,23 @@ function isURI(elm) {
     return elm[0] == '<'
 }
 
+// function resize()
+// {
+//     let heights = window.innerHeight;
+//     document.getElementById("solutions").style.height = heights + "px";
+// }
+
+// window.onresize = function() {
+//     resize();
+// };
+
+
+function textAreaAdjust(o) {
+    o.style.height = "1px";
+    o.style.height = (10 + o.scrollHeight) + "px";
+}
+
+let scope = undefined;
 
 (function () {
 
@@ -54,21 +71,50 @@ function isURI(elm) {
             }])
         .controller('SPARQLController', ['$scope', '$log', '$http', '$timeout', '$q',
             function ($scope, $log, $http, $timeout, $q) {
-                $scope.solutions = false;
-                $scope.fragment = false;
+                // resize();
+                scope = $scope;
+                $scope.solutions = undefined;
+                $scope.fragment = undefined;
                 $scope.query = 'PREFIX wot: <http://www.wot.org#> \
 SELECT * WHERE {?s rdfs:label ?l ; wot:hasLatestEntry [ wot:value ?v ] }';
                 console.log('hello from SPARQL!');
                 $scope.triples = [];
                 $scope.results = [];
                 $scope.vars = [];
+                $scope.predicateMap = {};
+                $scope.predicates = [];
+                $scope.onSolutionsRefresh = false;
+                $scope.onFragmentRefresh = false;
+                $scope.ntriples = 0;
 
-                // set options and call the d3sparql.xxxxx visualization methods in this library ...
-                let config = {
-                    "selector": "#result"
+                $scope.refreshSolutions = function() {
+                    if (!$scope.onSolutionsRefresh) {
+                        $scope.onSolutionsRefresh = true;
+                        $scope.solutionsRefreshTimer = $timeout(function () {
+                            $scope.solutions = true;
+                            $scope.onSolutionsRefresh = false;
+                            // console.log('refreshing...');
+                        }, 1);
+                    }
+                };
+
+                $scope.refreshFragment = function() {
+                    if (!$scope.onFragmentRefresh) {
+                        $scope.onFragmentRefresh = true;
+                        $scope.fragmentRefreshTimer = $timeout(function () {
+                            $scope.fragment = true;
+                            $scope.onFragmentRefresh = false;
+                            // console.log('refreshing fragment...');
+                        }, 1);
+                    }
+                };
+
+                $scope.isURI = function(t) {
+                    return t[0] == '<';
                 };
 
                 $scope.runQuery = function () {
+                    $scope.solutions = false;
                     $scope.results = [];
                     $scope.vars = [];
 
@@ -79,24 +125,39 @@ SELECT * WHERE {?s rdfs:label ?l ; wot:hasLatestEntry [ wot:value ?v ] }';
                         }
                     }).node(
                         'vars.*', function (v) {
-                            console.log(v);
-                            $scope.vars.push(v);
+                            scope.vars.push(v);
                         }
                     ).node(
                         'bindings.*', function (r) {
-                            $timeout(function () {
-                                $scope.solutions = true;
-                            }, 0);
-                            console.log(r);
                             $scope.results.push(r);
+                            if ($scope.vars.length == 0) {
+                                this.abort();
+                                $scope.solutionsRefreshTimer.cancel();
+                            } else {
+                                $scope.refreshSolutions();
+                            }
                         }
-                    );
+                    ).done(function () {
+                        if ($scope.solutionsRefreshTimer != undefined) {
+                            $scope.solutionsRefreshTimer.cancel();
+                        }
+                    });
                 };
 
+                $scope.predicateSO = function (p) {
+                    return $scope.predicateMap[p];
+                };
+
+                $scope.canceller = $q.defer();
+
                 $scope.getFragment = function () {
+                    $scope.canceller.resolve();
+                    $scope.canceller = $q.defer();
                     $scope.triples = [];
-                    let promises = [];
+                    $scope.predicates = [];
+                    $scope.predicateMap = {};
                     $scope.fragment = false;
+                    $scope.ntriples = 0;
 
                     function parse_chunk(chunk) {
                         let quads = chunk.split('\n');
@@ -107,96 +168,40 @@ SELECT * WHERE {?s rdfs:label ?l ; wot:hasLatestEntry [ wot:value ?v ] }';
                             let promise = $q(function (resolve, reject) {
                                 let triple = quad.split('·').slice(1);
                                 if (triple.length == 3) {
-                                    let subject = createNode($scope.store.rdf, triple[0]);
-                                    let predicate = createNode($scope.store.rdf, triple[1]);
-                                    let object = createNode($scope.store.rdf, triple[2]);
-                                    $scope.graph.add($scope.store.rdf.createTriple(subject, predicate, object));
+                                    $scope.ntriples++;
                                     $scope.triples.push(triple);
+                                    if ($scope.predicateMap[triple[1]] == undefined) {
+                                        $scope.predicateMap[triple[1]] = [];
+                                        $scope.predicates.push(triple[1]);
+                                    }
+                                    $scope.predicateMap[triple[1]].push([triple[0], triple[2]]);
                                     resolve(triple);
                                 } else {
                                     resolve(triple);
                                 }
                             });
-                            //promises.push(promise);
                         });
+                        $scope.refreshFragment();
                     }
 
-                    rdfstore.create(function (err, store) {
-                        $scope.store = store;
-                        $scope.graph = store.rdf.createGraph();
-
-                        store.registerDefaultProfileNamespaces();
-
-                        $http.get('http://localhost:5000/prefixes').success(function (data) {
-                            console.log(data);
-
-                            for (let property in data) {
-                                if (data.hasOwnProperty(property)) {
-                                    $scope.store.rdf.setPrefix(property, data[property]);
+                    let lastLoaded = 0;
+                    let preFill = '';
+                    $http({
+                        url: 'http://localhost:5000/fragment?query=' + encodeURIComponent($scope.query),
+                        headers: {'Accept': 'application/agora-quad-min'},
+                        eventHandlers: {
+                            progress: function (event) {
+                                if (event.loaded != undefined) {
+                                    let nlIndex = event.target.response.lastIndexOf('\n');
+                                    let chunk = preFill + event.target.response.substring(lastLoaded, nlIndex);
+                                    lastLoaded = nlIndex;
+                                    preFill = event.target.response.substring(nlIndex);
+                                    parse_chunk(chunk);
                                 }
                             }
-
-                            let lastLoaded = 0;
-                            let preFill = '';
-                            $http({
-                                url: 'http://localhost:5000/fragment?query=' + encodeURIComponent($scope.query),
-                                headers: {'Accept': 'application/agora-quad'},
-                                eventHandlers: {
-                                    progress: function (event) {
-                                        if (event.loaded != undefined) {
-                                            let nlIndex = event.target.response.lastIndexOf('\n');
-                                            let chunk = preFill + event.target.response.substring(lastLoaded, nlIndex);
-                                            lastLoaded = nlIndex;
-                                            preFill = event.target.response.substring(nlIndex);
-                                            parse_chunk(chunk);
-                                            $timeout(function () {
-                                                $scope.fragment = true;
-                                            }, 0);
-                                        }
-                                    }
-                                }
-                            }).success(function (d) {
-                                /* $q.all(promises).then(function (res) {
-                                 console.log(res);
-                                 let scope = $scope;
-                                 $scope.store.insert($scope.graph, function () {
-                                 $scope.store.execute($scope.query, function (err, results) {
-                                 let vars = [];
-                                 let bindings = [];
-                                 if (results != undefined) {
-                                 bindings = results.map(function (r) {
-                                 let r_prime = {};
-                                 for (let v in r) {
-                                 if (r.hasOwnProperty(v)) {
-                                 if (vars.indexOf(v) < 0) {
-                                 vars.push(v);
-                                 }
-                                 let value = null;
-                                 if (r[v] != null) {
-                                 value = r[v].value;
-                                 }
-                                 r_prime[v] = {
-                                 value: value,
-                                 type: r[v].token
-                                 }
-                                 }
-                                 }
-                                 return r_prime;
-                                 });
-                                 }
-
-                                 let sparql_result = {head: {vars: vars}, results: {bindings: bindings}};
-                                 console.log(sparql_result);
-                                 //d3sparql.htmltable(sparql_result, config);
-                                 $timeout(function () {
-                                 scope.solutions = true;
-                                 scope.store.close();
-                                 }, 0);
-                                 });
-                                 });
-                                 });*/
-                            });
-                        });
+                        },
+                        timeout: $scope.canceller.promise
+                    }).success(function (d) {
                     });
                 };
             }]);

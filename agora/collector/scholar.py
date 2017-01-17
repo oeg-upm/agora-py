@@ -340,8 +340,10 @@ class Fragment(object):
             if not self.filters:
                 return agp_map
             rev_map = {v: k for k, v in agp_map.items()}
-            filter_map = {rev_map[v]: set(map(lambda x: x.replace(v, rev_map[v]), fs)) for v, fs in filters.items()}
-            if filter_map == self.filters:
+            filter_map = {rev_map[v]: set(map(lambda x: x.replace(v, rev_map[v]), fs)) for v, fs in filters.items() if
+                          v in rev_map}
+            # There may be incoming filters that do not affect the agp
+            if filter_map == {v: f for v, f in self.filters.items() if v in rev_map}:
                 return agp_map
 
 
@@ -354,7 +356,7 @@ class FragmentIndex(object):
         self.kv = kv if kv is not None else get_kv()
         self.triples = triples if triples is not None else get_triple_store()
         self.__planner = planner
-        self.__lock = Lock()
+        self.lock = Lock()
         # Load fragments from kv
         self.__fragments = dict(self.__load_fragments())
 
@@ -374,12 +376,16 @@ class FragmentIndex(object):
                 continue
 
             if fragment is not None:
-                yield (fragment_id, fragment)
+                # All those fragments that were not fully collected are marked here to be orphaned
+                if not fragment.updated and not fragment.collecting:
+                    self.kv.set('{}:stored'.format(fragment.key), False)
+                else:
+                    yield (fragment_id, fragment)
 
     def get(self, agp, general=False, filters=None):
         # type: (AGP, bool) -> dict
         mapping = None
-        with self.__lock:
+        with self.lock:
             active_fragments = filter(lambda x: x not in self.__orphaned, self.__fragments.keys())
             for fragment_id in sorted(active_fragments, key=lambda x: abs(
                             len(self.__fragments[x].filters) - len(filters)), reverse=False):
@@ -407,7 +413,7 @@ class FragmentIndex(object):
 
     def register(self, agp, filters=None):
         # type: (AGP, dict) -> Fragment
-        with self.__lock:
+        with self.lock:
             fragment_id = str(uuid())
             fragment = Fragment(agp, self.kv, self.triples, self.__fragments_key, fragment_id, filters=filters)
             with self.kv.pipeline() as pipe:
@@ -422,27 +428,26 @@ class FragmentIndex(object):
         return FragmentStream(self.kv, fid).get(until)
 
     def add_orphaned(self, fid):
-        self.__orphaned[fid] = datetime.utcnow() + timedelta(seconds=10)
+        self.__orphaned[fid] = datetime.utcnow() + timedelta(seconds=1000)
 
     @property
     def orphaned(self):
         return self.__orphaned
 
     def remove(self, fid):
-        with self.__lock:
-            fragment = self.__fragments[fid]
-            if fid not in self.__orphaned:
-                log.info('Discarding fragment: {}'.format(fragment.fid))
-                self.add_orphaned(fid)
-                self.kv.sadd('{}:orph'.format(self.__fragments_key), fid)
-            else:
-                now = datetime.utcnow()
-                if now > self.__orphaned[fid]:
-                    log.info('Removing fragment: {}'.format(fragment.fid))
-                    self.kv.srem(self.__fragments_key, fid)
-                    self.kv.srem('{}:orph'.format(self.__fragments_key), fid)
-                    fragment.remove()
-                    del self.__fragments[fid]
+        fragment = self.__fragments[fid]
+        if fid not in self.__orphaned:
+            log.info('Discarding fragment: {}'.format(fragment.fid))
+            self.add_orphaned(fid)
+            self.kv.sadd('{}:orph'.format(self.__fragments_key), fid)
+        else:
+            now = datetime.utcnow()
+            if now > self.__orphaned[fid]:
+                log.info('Removing fragment: {}'.format(fragment.fid))
+                self.kv.srem(self.__fragments_key, fid)
+                self.kv.srem('{}:orph'.format(self.__fragments_key), fid)
+                fragment.remove()
+                del self.__fragments[fid]
 
 
 class Scholar(Collector):
@@ -470,19 +475,20 @@ class Scholar(Collector):
     def _daemon(self):
         futures = {}
         while self.__enabled:
-            for fragment in self.__index.fragments.values():
-                if not fragment.updated and not fragment.collecting:
-                    if not fragment.newcomer:
-                        self.__index.remove(fragment.fid)
-                    else:
-                        collector = Collector(self.planner, self.cache)
-                        collector.loader = self.loader
-                        log.info('Starting fragment collection: {}'.format(fragment.fid))
-                        try:
-                            futures[fragment.fid] = tpool.submit(fragment.populate, collector)
-                        except RuntimeError as e:
-                            traceback.print_exc()
-                            log.warn(e.message)
+            with self.__index.lock:
+                for fragment in self.__index.fragments.values():
+                    if not fragment.updated and not fragment.collecting:
+                        if not fragment.newcomer:
+                            self.__index.remove(fragment.fid)
+                        else:
+                            collector = Collector(self.planner, self.cache)
+                            collector.loader = self.loader
+                            log.info('Starting fragment collection: {}'.format(fragment.fid))
+                            try:
+                                futures[fragment.fid] = tpool.submit(fragment.populate, collector)
+                            except RuntimeError as e:
+                                traceback.print_exc()
+                                log.warn(e.message)
 
             if futures:
                 log.info('Waiting for: {} collections'.format(len(futures)))
@@ -491,7 +497,8 @@ class Scholar(Collector):
                     exception = future.exception()
                     if exception is not None:
                         log.warn(exception.message)
-                        self.__index.remove(fragment_id)
+                        with self.__index.lock:
+                            self.__index.remove(fragment_id)
 
                 futures.clear()
             try:
@@ -643,7 +650,7 @@ class Scholar(Collector):
         tp_filter_roots = sorted(tp_filter_roots, key=lambda x: len(ft.graph.successors(x.o)), reverse=True)
         for tp in tp_filter_roots:
             pairs = {}
-            for (s, o) in candidates.get(tp, []):
+            for (s, o) in candidates.get(tp, set([])).copy():
                 if tp not in pairs:
                     pairs[tp] = set([])
                 pairs[tp].add((s, o))

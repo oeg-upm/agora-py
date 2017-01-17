@@ -127,8 +127,12 @@ class FragmentProcessor(SPARQLProcessor):
             query = translateQuery(parsetree, base, initNs)
         else:
             query = strOrQuery
-        log.debug(
-            'Took {}ms to parse the SPARQL query: {}'.format((datetime.now() - start).total_seconds(), str(strOrQuery)))
+        try:
+            log.debug(
+                u'Took {}ms to parse the SPARQL query: {}'.format((datetime.now() - start).total_seconds(),
+                                                                  str(strOrQuery)))
+        except Exception:
+            pass
 
         eval = evalQuery(self.graph, query, initBindings, base, **kwargs)
         return eval

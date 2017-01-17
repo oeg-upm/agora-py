@@ -1,0 +1,77 @@
+@prefix ted: <http://agora.org/ted#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix wot: <http://www.wot.org#> .
+
+
+_:ted1 a ted:TED ;
+       ted:describesEcosystem _:eco .
+
+_:eco a ted:Ecosystem ;
+      ted:includes _:service .
+
+_:service a wot:Service ;
+      wot:identifier "service" ;
+      wot:onEndpoint [
+        wot:href "http://localhost:5005/things"^^xsd:anyURI ;
+          wot:mediaType "application/json" ;
+          wot:mapping _:exposesWT
+      ] .
+
+_:exposesWT a wot:Mapping ;
+      wot:key "exposesWebThing" ;
+      wot:predicate wot:exposesWebThing ;
+      wot:valueTransform _:stars .
+
+_:stars a wot:Thing ;
+      wot:identifier "stars" ;
+      wot:onEndpoint [
+          wot:href "$item" ;
+          wot:mediaType "application/json" ;
+          wot:mapping _:idMap , _:creationMap, _:hasWPMap
+      ] ;
+      wot:includes [
+          wot:predicate wot:location ;
+          wot:object <http://es.dbpedia.org/resource/Madrid>
+      ] .
+
+_:labelMap a wot:Mapping ;
+      wot:key "label" ;
+      wot:predicate rdfs:label .
+
+_:idMap a wot:Mapping ;
+      wot:key "identifier" ;
+      wot:predicate wot:identifier .
+
+_:creationMap a wot:Mapping ;
+      wot:key "creationDate" ;
+      wot:predicate wot:creationDate .
+
+_:hasWPMap a wot:Mapping ;
+      wot:key "hasWebThingProperty" ;
+      wot:predicate wot:offersInteraction ;
+      wot:valueTransform [
+          a wot:Property ;
+          wot:identifier "property" ;
+          wot:onEndpoint [
+            wot:href "$item" ;
+            wot:mediaType "application/json" ;
+            wot:mapping _:labelMap, _:tsMap, _:latestMap, _:valueMap
+          ]
+      ] .
+
+_:tsMap a wot:Mapping ;
+      wot:key "entryTimeStamp" ;
+      wot:predicate wot:entryTimeStamp .
+
+_:valueMap a wot:Mapping ;
+      wot:key "value" ;
+      wot:predicate wot:value .
+
+_:latestMap a wot:Mapping ;
+      wot:key "hasLatestEntry" ;
+      wot:predicate wot:hasLatestEntry .

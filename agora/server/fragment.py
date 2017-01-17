@@ -46,13 +46,19 @@ def build(agora, server=None, import_name=__name__, fragment_function=None):
 
     fragment_function = agora.fragment_generator if fragment_function is None else fragment_function
 
-    @server.get('/fragment', produce_types=('text/n3', 'application/agora-quad', 'text/html'))
+    @server.get('/fragment',
+                produce_types=('text/n3', 'application/agora-quad', 'application/agora-quad-min', 'text/html'))
     def get_fragment():
         def gen_fragment():
             first = True
-            if request.accept_mimetypes.best == 'application/agora-quad':
+            best_mime = request.accept_mimetypes.best
+            if best_mime.startswith('application/agora-quad'):
                 for c, s, p, o in generator:
-                    quad = u'{}·{}·{}·{}\n'.format(c, s.n3(), p.n3(), o.n3())
+                    if '-min' in best_mime:
+                        quad = u'{}·{}·{}·{}\n'.format(c, s.n3(plan.namespace_manager),
+                                                       p.n3(plan.namespace_manager), o.n3(plan.namespace_manager))
+                    else:
+                        quad = u'{}·{}·{}·{}\n'.format(c, s.n3(), p.n3(), o.n3())
 
                     yield quad
             else:

@@ -161,6 +161,8 @@ def evalJoin(ctx, join):
 def evalUnion(ctx, union):
     res = set()
 
+    print 'evaluating union {}'.format(union)
+
     for x in evalPart(ctx, union.p1):
         res.add(x)
         yield x
@@ -211,18 +213,25 @@ def __serialize_expr(expr, context=None):
             return expr.eval()
         else:
             if 'Builtin_' in expr.name:
-                return '{}({})'.format(expr.name.replace('Builtin_', ''), expr.arg.n3())
+                if 'REGEX' in expr.name:
+                    expr_str = u'REGEX({}, "{}"'.format(expr.text.n3(), expr.pattern)
+                    if expr.flags:
+                        expr_str += u', {}'.format(expr.flags)
+                    expr_str += u')'
+                    return expr_str
+                else:
+                    return u'{}({})'.format(expr.name.replace('Builtin_', ''), expr.arg.n3())
             expr_str = __serialize_expr(expr.expr, expr.name)
 
             if 'Unary' in expr.name:
-                return '{}{}'.format(__sparql_op_symbols[expr.name], expr_str)
+                return u'{}{}'.format(__sparql_op_symbols[expr.name], expr_str)
 
             other_str = __serialize_expr(expr['other'], expr.name)
             if expr.name in __sparql_op_symbols:
                 op_str = __sparql_op_symbols[expr.name]
             else:
                 op_str = expr['op']
-            return '{} {} {}'.format(expr_str, op_str, other_str)
+            return u'{} {} {}'.format(expr_str, op_str, other_str)
     elif isinstance(expr, list):
         return __sparql_op_symbols[context].join(map(lambda x: __serialize_expr(x), expr))
     else:
@@ -233,7 +242,7 @@ def __serialize_expr(expr, context=None):
 
 
 def __serialize_filter(f):
-    return '{}'.format(__serialize_expr(f))
+    return u'{}'.format(__serialize_expr(f))
 
 
 def discriminate_filters(expr):
@@ -508,7 +517,7 @@ def evalConstructQuery(ctx, query):
 class AgoraQueryContext(QueryContext):
     def __init__(self, graph=None, bindings=None, incremental=True):
         super(AgoraQueryContext, self).__init__(graph, bindings)
-        self.incremental = incremental
+        self.incremental = False
         self.filters = {}
 
     def clone(self, bindings=None):

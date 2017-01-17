@@ -5,7 +5,12 @@
 
 .table {
     margin: 0;
-    border: none
+    border: none;
+    table-layout: fixed;
+}
+
+#ftriples {
+    table-layout: fixed;
 }
 
 .form-control {
@@ -17,18 +22,29 @@
     margin-top: 20px;
 }
 
-.triple {
-    margin-bottom: 2px;
-    font-size: 12px;
+.scroll {
+    overflow-y: scroll;
+    overflow-x: hidden;
+    height: 100vh;
+}
+
+#solutions {
+    padding-right: 6px;
 }
 
 .result {
-    border: 1px solid #509dc8;
+    border: 1px solid #386e8c;
     border-radius: 5px;
     overflow: hidden;
     width: 100%;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     margin-left: 5px;
+}
+
+.triple {
+    margin-left: 0;
+    border: 1px solid #386e8c;
+    margin-bottom: 5px;
 }
 
 .var {
@@ -38,20 +54,84 @@
     color: white;
     font-weight: bold;
     font-size: 15px;
-    width: 30px;
+    float: left;
+    max-width: 15%;
     border-top: 0;
+    overflow-wrap: normal;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pred {
+    font-family: 'Consolas', 'Deja Vu Sans Mono', 'Bitstream Vera Sans Mono', monospace;
+    /*font-weight: bold;*/
+    font-size: 13px;
+    margin-bottom: 2px;
+    margin-top: 5px;
+    /*color: #4d729c;*/
+}
+
+.term {
+    width: 50%;
+    display: inline-block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hterm {
+    width: 50%;
+    display: inline-block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+    font-family: Monoxil, sans-serif;
+    color: #509dc8;
+    font-weight: bold;
+    font-size: 13px;
+    border-top: 0;
+}
+
+.uri {
+    color: #386e8c;
+}
+
+.vuri {
+    background-color: #439235;
+}
+
+.vliteral {
+    background-color: #386e8c;
+}
+
+.vblank {
+    background-color: #7d8184;
 }
 
 .value {
     font-family: 'Consolas', 'Deja Vu Sans Mono', 'Bitstream Vera Sans Mono', monospace;
     border: none;
     font-size: 12px;
+    float: left;
+    text-overflow: ellipsis;
+    max-width: 85%;
+    overflow-wrap: normal;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.tvalue {
+    max-width: 97%;
 }
 
 .table > tbody > tr > td, .table > tbody > tr > th, .table > tfoot > tr > td, .table > tfoot > tr > th, .table > thead > tr > td, .table > thead > tr > th {
     line-height: 1;
     border-top: 0;
-    padding: 6px;
+    padding: 3px 4px;
+    /*overflow-wrap: break-word;*/
 }
 
 .navbar-brand {
@@ -77,4 +157,20 @@
     margin-left: 10px;
     background-color: #509dc8;
 
+}
+
+#query {
+    resize: none;
+}
+
+#fpanel {
+    padding-right: 0;
+}
+
+#spanel {
+    padding-left: 0;
+}
+
+#triples {
+    padding-right: 6px;
 }

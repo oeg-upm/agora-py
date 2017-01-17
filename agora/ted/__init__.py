@@ -18,6 +18,8 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+import base64
+import traceback
 
 import networkx as nx
 import requests
@@ -29,10 +31,12 @@ from rdflib import Graph
 from rdflib.namespace import Namespace, RDF
 from rdflib.term import Literal, URIRef, BNode
 
+from agora.collector.http import extract_ttl
 from agora.collector.wrapper import ResourceWrapper
 from agora.engine.fountain import AbstractFountain
 from agora.engine.plan.agp import extend_uri
-from agora.ted.descriptor import Resource
+from agora.ted.descriptor import Resource, encode_rdict
+from agora.ted.evaluate import evaluate
 
 __author__ = 'Fernando Serena'
 
@@ -93,7 +97,6 @@ def apply_mappings(data, mappings, ns):
     def value_mapping(k, data, mapping, ns):
         if k in mapping and mapping[k].transform is not None:
             return mapping[k].transform.attach(data)
-            # return data
         else:
             if isinstance(data, dict) or isinstance(data, list):
                 return apply_mapping(data, mapping, ns)
@@ -107,10 +110,12 @@ def apply_mappings(data, mappings, ns):
             return [apply_mapping(elm, mapping, ns) for elm in data]
 
         if data in mapping:
-            return mapping[data].uri.n3(ns)
+            return mapping[data].predicate.n3(ns)
         return data
 
     m_dict = {m.key: m for m in mappings}
+    if not isinstance(data, dict):
+        data = {m.key: data for m in mappings}
     mapped = apply_mapping(data, m_dict, ns)
     return mapped
 
@@ -144,27 +149,31 @@ def ld_triples(ld, g=None):
 
 
 class Gateway(object):
-    def __init__(self, ted, fountain):
+    def __init__(self, ted, fountain, server_name='gateway', url_scheme='http', server_port=None, path=''):
         # type: (TED) -> None
         self.__ted = ted
         self.__fountain = fountain
         self.__ns = get_ns(self.__fountain)
         self.__seeds = set([])
-        self.__wrapper = ResourceWrapper()
-        self.__rdict = {unicode(t.node.toPython()): t for t in ted.ecosystem.things}
-        self.__wrapper.intercept('/<tid>')(self.describe_resource)
+        self.__wrapper = ResourceWrapper(server_name=server_name, url_scheme=url_scheme, server_port=server_port, path=path)
+        self.__rdict = {t.id: t for t in ted.ecosystem.things}
+        self.__ndict = {t.node: t.id for t in ted.ecosystem.things}
+
+        self.__wrapper.intercept('{}/<tid>'.format(path))(self.describe_resource)
+        self.__wrapper.intercept('{}/<tid>/<b64>'.format(path))(self.describe_resource)
         self.__network = nx.DiGraph()
 
         for tid, resource in self.__rdict.items():
-            self.__network.add_node(resource.node)
-            uri = URIRef(self.__wrapper.url_for('describe_resource', tid=tid))
+            self.__network.add_node(resource.id)
+            uri = URIRef(self.url_for(tid=tid))
             if resource in ted.ecosystem.roots:
                 for t in resource.types:
                     self.__seeds.add((uri, t.n3(self.__ns)))
-            parents = filter(lambda other: list(other.graph.triples((None, None, resource.node))),
-                             self.__rdict.values())
+            parents = filter(
+                lambda other: list(other.graph.triples((None, None, resource.node))),
+                self.__rdict.values())
             for parent in parents:
-                self.__network.add_edge(parent.node, resource.node)
+                self.__network.add_edge(parent.id, resource.id)
 
         print self.__network.edges()
 
@@ -176,58 +185,93 @@ class Gateway(object):
     def base(self):
         return self.__wrapper.base
 
+    @property
+    def host(self):
+        return self.__wrapper.host
+
+    @property
+    def path(self):
+        return self.__wrapper.path
+
     def load(self, uri, format=None):
         return self.__wrapper.load(uri)
 
-    def compose_endpoints(self, thing):
-        node = thing.node
-        for base_e in thing.base:
-            if base_e.uri is None:
-                for pred in self.__network.predecessors(node):
-                    pred_thing = self.__rdict[pred.toPython()]
+    def compose_endpoints(self, resource):
+        id = resource.id
+        for base_e in resource.base:
+            if base_e.href is None:
+                for pred in self.__network.predecessors(id):
+                    pred_thing = self.__rdict[pred]
                     for pred_e in self.compose_endpoints(pred_thing):
                         yield pred_e + base_e
             else:
                 yield base_e
 
-    def describe_resource(self, tid, **kwargs):
+    def evaluate_href(self, href, **kwargs):
+        for v in filter(lambda x: x in href, kwargs):
+            href = href.replace(v, kwargs[v])
+        return evaluate(href)
+
+    def describe_resource(self, tid, b64=None, **kwargs):
         resource = self.__rdict[tid]
 
         g = ConjunctiveGraph()
+        ttl = 100000
         try:
-            r_uri = self.__wrapper.url_for('describe_resource', tid=tid)
+            if b64 is not None:
+                b64 = b64.replace('%3D', '=')
+                resource_args = eval(base64.b64decode(b64))
+            else:
+                resource_args = {}
+            r_uri = self.url_for(tid=tid, b64=b64)
             if kwargs:
                 r_uri = '{}?{}'.format(r_uri, '&'.join(['{}={}'.format(k, kwargs[k]) for k in kwargs]))
             r_uri = URIRef(r_uri)
             for s, p, o in resource.graph:
-                if s == resource.node:
+                if s == resource.node and p == RDF.type:
                     s = r_uri
-                if isinstance(o, BNode) and o.toPython() in self.__rdict:
-                    o = URIRef(self.__wrapper.url_for('describe_resource', tid=o.toPython()))
-                g.add((s, p, o))
+                    if isinstance(o, BNode) and o in self.__ndict:
+                        o = URIRef(self.url_for(tid=self.__ndict[o]))
+                    g.add((s, p, o))
+
             if resource.base:
                 for e in self.compose_endpoints(resource):
-                    uri = e.uri
-                    for v in filter(lambda x: x in uri, kwargs):
-                        uri = uri.replace(v, kwargs[v])
-                    response = requests.get(uri, headers={'Accept': e.media})
-                    data = response.json()
-                    if e.path is not None:
-                        jsonpath_expr = parse(e.path)
-                        data = [match.value for match in jsonpath_expr.find(data)]
-                        if len(data) == 1:
-                            data = data.pop()
-                    ld = self.enrich(r_uri, apply_mappings(data, e.mappings, self.__ns), resource.types,
-                                     self.__fountain, ns=self.__ns)
-                    ld_triples(ld, g)
+                    href = e.href
+                    href = self.evaluate_href(href, **resource_args)
+                    print 'getting {}'.format(href)
+                    response = requests.get(href, headers={'Accept': e.media})
+                    if response.status_code == 200:
+                        data = response.json()
+                        if e.path is not None:
+                            jsonpath_expr = parse(e.path)
+                            data = [match.value for match in jsonpath_expr.find(data)]
+                            if len(data) == 1:
+                                data = data.pop()
+                        ld = self.enrich(r_uri, apply_mappings(data, e.mappings, self.__ns), resource.types,
+                                         self.__fountain, ns=self.__ns, **resource_args)
+                        ld_triples(ld, g)
+                        ttl = min(ttl, extract_ttl(response.headers) or ttl)
+
+            for i in resource.includes:
+                obj = i.object
+                if obj in self.__ndict:
+                    object_resource = self.__rdict[self.__ndict[obj]]
+                    rdict = {v: resource_args[v] for v in object_resource.vars if v in resource_args}
+                    obj = URIRef(
+                        self.url_for(tid=self.__ndict[obj], b64=encode_rdict(rdict)))
+                g.add((r_uri, i.predicate, obj))
+
         except Exception as e:
             print e.message
-        return g, {}
+            traceback.print_exc()
+        return g, {'Cache-Control': 'max-age={}'.format(ttl)}
 
-    def url_for(self, tid):
-        return self.__wrapper.url_for('describe_resource', tid=tid)
+    def url_for(self, tid, b64=None):
+        if isinstance(tid, BNode) and tid in self.__ndict:
+            tid = self.__ndict[tid]
+        return self.__wrapper.url_for('describe_resource', tid=tid, b64=b64)
 
-    def enrich(self, uri, data, types, fountain, ns=None, context=None):
+    def enrich(self, uri, data, types, fountain, ns=None, context=None, **kwargs):
         # type: (URIRef, dict, list, AbstractFountain) -> dict
         if context is None:
             context = {}
@@ -270,6 +314,6 @@ class Gateway(object):
                                           context)
                         data[p_n3] = sub['@graph']
                     elif hasattr(p_n3_data, '__call__'):
-                        data[p_n3] = p_n3_data(key=p_n3, context=context, uri_provider=self.url_for)
+                        data[p_n3] = p_n3_data(key=p_n3, context=context, uri_provider=self.url_for, **kwargs)
 
         return {'@context': context, '@graph': data}

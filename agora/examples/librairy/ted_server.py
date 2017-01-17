@@ -1,4 +1,3 @@
-# coding=utf-8
 import logging
 from StringIO import StringIO
 
@@ -11,13 +10,14 @@ from agora.collector.scholar import Scholar
 from agora.server.fountain import build as bn
 from agora.server.fragment import build as bf
 from agora.server.planner import build as bp
+from agora.server.publish import build as bh
 from agora.server.sparql import build as bs
-from agora.ted.publish import build as bg
 from agora.ted import TED, Gateway
+from agora.ted.publish import build as bg
 
 setup_logging(logging.DEBUG)
 
-with open('ted2.ttl') as f:
+with open('ted.ttl') as f:
     ted_str = f.read()
 
 g = Graph()
@@ -27,16 +27,6 @@ cache = RedisCache(min_cache_time=10, persist_mode=True, path='cache', redis_fil
 
 # Agora object
 agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
-with open('wot3.ttl') as f:
-    try:
-        agora.fountain.add_vocabulary(f.read())
-    except:
-        pass
-
-ted = TED(g)
-gw = Gateway(ted, agora.fountain, server_name='localhost', server_port=5000, path='/gateway')
-
-scholar = Scholar(agora.planner, cache=cache, loader=gw.load)
 
 
 def query(query, **kwargs):
@@ -51,19 +41,27 @@ server = bs(agora, query_function=query, import_name=__name__)
 bf(agora, server=server, fragment_function=fragment)
 bp(agora.planner, server=server)
 bn(agora.fountain, server=server)
+bh(cache, server=server)
+
+with open('librairy.ttl') as f:
+    try:
+        agora.fountain.add_vocabulary(f.read())
+    except:
+        pass
+
+ted = TED(g)
+gw = Gateway(ted, agora.fountain, server_name='localhost', server_port=5000, path='/gateway')
 bg(gw, server=server)
 
-agora.fountain.delete_type_seeds('wot:Thing')
+agora.fountain.delete_type_seeds('librairy:DocumentService')
+agora.fountain.delete_type_seeds('librairy:TopicService')
 for uri, type in gw.seeds:
     try:
         agora.fountain.add_seed(uri, type)
     except:
         pass
 
-agora.fountain.delete_type_seeds('sch:Place')
-agora.fountain.add_seed('http://es.dbpedia.org/resource/Madrid', 'sch:Place')
-agora.fountain.add_seed('http://es.dbpedia.org/resource/Reykjav%C3%ADk', 'sch:Place')
-agora.fountain.add_seed('http://es.dbpedia.org/resource/A%C3%B1ora', 'sch:Place')
+scholar = Scholar(agora.planner, cache=cache, loader=gw.load)
 
 if __name__ == '__main__':
     server.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False, threaded=True)

@@ -37,7 +37,7 @@ from rdflib.graph import Graph
 from werkzeug.http import parse_dict_header
 
 from agora.collector.execution import parse_rdf
-from agora.collector.http import http_get
+from agora.collector.http import http_get, extract_ttl
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
 
@@ -207,15 +207,7 @@ class RedisCache(object):
                     if g != source:
                         g.__iadd__(source)
 
-                cache_control = headers.get('Cache-Control', None)
-                if cache_control is not None:
-                    cache_dict = parse_dict_header(cache_control)
-                    ttl = int(math.ceil(float(cache_dict.get('max-age', ttl))))
-                else:
-                    expires = headers.get('expires', None)
-                    if expires is not None:
-                        exp_dt = dt(*eut.parsedate(expires)[:6])
-                        ttl = int(math.ceil((exp_dt - dt.now()).total_seconds()))
+                ttl = extract_ttl(headers) or ttl
 
                 # Let's create a new one
                 p.set('{}:{}:uri'.format(self.__key_prefix, uuid), gid)

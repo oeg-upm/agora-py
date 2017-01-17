@@ -28,7 +28,7 @@ __author__ = 'Fernando Serena'
 
 
 class ResourceWrapper(object):
-    def __init__(self, server_name=None, url_scheme='http', server_port=None):
+    def __init__(self, server_name=None, url_scheme='http', server_port=None, path=''):
         if server_name is None:
             server_name = shortuuid.uuid().lower()
         if server_port is None:
@@ -47,6 +47,9 @@ class ResourceWrapper(object):
         self.__base = '{}://{}'.format(url_scheme, server_name)
         if server_port is not None and server_port != '80' and server_port != '443':
             self.__base += ':{}'.format(server_port)
+        self.__host = self.__base
+        self.__base += path
+        self.__path = path
 
     def add_rule(self, rule, callback):
         r = Rule(rule, endpoint=callback)
@@ -61,10 +64,18 @@ class ResourceWrapper(object):
     def base(self):
         return self.__base
 
+    @property
+    def host(self):
+        return self.__host
+
+    @property
+    def path(self):
+        return self.__path
+
     def __match(self, uri):
         parse = urlparse(uri, allow_fragments=True)
         if parse.hostname == self.__environ['SERVER_NAME'] and parse.scheme == self.__environ['wsgi.url_scheme'] and (
-                        parse.port == self.__environ['SERVER_PORT'] or (parse.port is None)):
+                        str(parse.port) == self.__environ['SERVER_PORT'] or (parse.port is None)):
             qs = filter(lambda x: x, parse.query.split('&'))
             query_dict = {x[0]: x[1] for x in [x.split('=') for x in qs]}
             return self.__adapter.match(parse.path), query_dict

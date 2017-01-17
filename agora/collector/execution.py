@@ -31,19 +31,19 @@ from threading import RLock, Thread, Event, Lock
 from xml.sax import SAXParseException
 
 import networkx as nx
-from rdflib import BNode
-
-from agora.collector.http import get_resource_ttl, RDF_MIMES, http_get
-from agora.engine.plan.graph import AGORA
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
+from rdflib import BNode
 from rdflib import ConjunctiveGraph, RDF, URIRef
 from rdflib import Graph
 from rdflib import RDFS
 from rdflib import Variable
 from rdflib.plugins.sparql.algebra import translateQuery
-from rdflib.plugins.sparql.parser import expandUnicodeEscapes, Query, Filter
+from rdflib.plugins.sparql.parser import expandUnicodeEscapes, Query
 from rdflib.plugins.sparql.sparql import QueryContext
+
+from agora.collector.http import get_resource_ttl, RDF_MIMES, http_get
+from agora.engine.plan.graph import AGORA
 
 pool = ThreadPoolExecutor(max_workers=multiprocessing.cpu_count())
 
@@ -181,6 +181,7 @@ class SSWrapper(object):
         self.__nodes = {}
         self.__pattern_space = {}
         self.__filter_trees = {}
+        self.__tp_graph = nx.DiGraph()
         for space in self.__plan.subjects(RDF.type, AGORA.SearchSpace):
             self.__spaces[space] = set([])
             self.__filter_trees[space] = []
@@ -194,6 +195,7 @@ class SSWrapper(object):
             space = tp_wrapper.defined_by
             self.__spaces[space].add(tp)
             self.__pattern_space[tp_wrapper] = space
+            self.__tp_graph.add_edge(tp_wrapper.s, tp_wrapper.o)
 
             if not isinstance(tp_wrapper.o, Variable) or not isinstance(tp_wrapper.s, Variable):
                 filter_roots.add(tp_wrapper)
@@ -238,6 +240,10 @@ class SSWrapper(object):
             self.__build_filter_tree(ft, tp)
             ft.add_variable(v)
 
+    @property
+    def tp_graph(self):
+        return self.__tp_graph
+
 
 class PlanWrapper(object):
     def __init__(self, plan):
@@ -270,13 +276,17 @@ class PlanWrapper(object):
                 for tp in patterns:
                     filtered_vars = list(self.__ss.filtered_vars(tp.defined_by))
                     for ft in self.__ss.filter_trees(tp.defined_by):
+                        nodes = ft.graph.nodes()
                         if tp.o in ft.graph:
                             for v in filtered_vars:
-                                try:
-                                    dist = nx.shortest_path(ft.graph, tp.o, v)
-                                    aggr_dist = min(aggr_dist, len(dist))
-                                except nx.NetworkXNoPath:
-                                    pass
+                                if tp.o in nodes and v in nodes:
+                                    try:
+                                        dist = nx.shortest_path(ft.graph, tp.o, v)
+                                        aggr_dist = min(aggr_dist, len(dist))
+                                    except nx.NetworkXNoPath:
+                                        pass
+                                    except nx.NetworkXError as e:
+                                        print e.message
                     weight += aggr_dist
 
             return weight
@@ -309,6 +319,13 @@ class PlanWrapper(object):
 
     def filter_var(self, tp, v):
         self.__ss.filter_var(tp, v)
+
+    def connected(self, v1, v2):
+        try:
+            nx.shortest_path(self.__ss.tp_graph, v1, v2)
+            return True
+        except nx.NetworkXNoPath:
+            return False
 
 
 def parse_rdf(graph, content, format):
@@ -516,19 +533,36 @@ class PlanExecutor(object):
             weight = int(x.s in var_filters) + int(x.o in var_filters)
             return weight
 
-        def __follow_node(node, seed, tree_graph):
+        def __any_parent_filtered(space, parent, tp):
+            for (ps, link, vars) in parent:
+                for v in vars:
+                    if self.__wrapper.is_filtered(ps, space, v) and self.__wrapper.connected(v, tp.s):
+                        return True
+            return False
+
+        def __follow_node(node, seed, tree_graph, parent=None):
+            if parent is None:
+                parent = []
             candidates = set([])
             quads = set([])
             predicate_pass = {}
+            seed_variables = set([])
             try:
                 for n, n_data, e_data in self.__wrapper.successors(node):
                     expected_types = e_data.get('expectedType', None)
                     patterns = n_data.get('byPattern', [])
                     on_property = e_data.get('onProperty', None)
 
-                    seed_variables = set([])
                     for space in n_data['spaces']:
+                        next_seeds = set([])
+
+                        last_tp = None
+                        sobs = []
+
                         for tp in sorted(patterns, key=lambda x: __tp_weight(x), reverse=True):
+                            if __any_parent_filtered(space, parent, tp):
+                                continue
+
                             seed_variables.add(tp.s)
 
                             if space != tp.defined_by:
@@ -553,8 +587,9 @@ class PlanExecutor(object):
 
                             if tp.p != RDF.type:
                                 try:
-                                    sobs = list(__process_pattern_link_seed(seed, tree_graph, tp.p,
-                                                                            expected_types=expected_types))
+                                    if not last_tp or last_tp.p != tp.p:
+                                        sobs = list(__process_pattern_link_seed(seed, tree_graph, tp.p,
+                                                                                expected_types=expected_types))
 
                                     # TODO: This may not apply when considering OPTIONAL support
                                     if not isinstance(tp.o, Variable) and not sobs:
@@ -563,14 +598,16 @@ class PlanExecutor(object):
                                     if not sobs:
                                         self.__wrapper.filter(seed, space, tp.s)
 
+                                    filtered = False
+                                    obs_candidates = set([])
                                     for object in sobs:
                                         __check_stop()
 
-                                        filtered = False
                                         if not isinstance(tp.o, Variable):
                                             if object.n3() != tp.o.n3():
                                                 self.__wrapper.filter(seed, space, tp.s)
                                                 filtered = True
+                                                break
                                         else:
                                             if tp.o in var_filters:
                                                 for var_f in var_filters[tp.o]:
@@ -582,10 +619,19 @@ class PlanExecutor(object):
                                                     if not passing:
                                                         self.__wrapper.filter(seed, space, tp.s)
                                                         filtered = True
+                                                        break
 
                                         if not filtered:
                                             candidate = (tp, seed, object)
-                                            candidates.add(candidate)
+                                            obs_candidates.add(candidate)
+
+                                    if filtered:
+                                        obs_candidates.clear()
+                                    else:
+                                        candidates.update(obs_candidates)
+
+                                    if not next_seeds and tp.p == on_property:
+                                        next_seeds = set(sobs)
 
                                 except AttributeError as e:
                                     log.warning('Trying to find {} objects of {}: {}'.format(tp.p, seed, e.message))
@@ -609,38 +655,43 @@ class PlanExecutor(object):
                                     log.warning(
                                         'Trying to find {} objects of {}: {}'.format(on_property, seed, e.message))
 
-                        next_seeds = set([])
+                            last_tp = tp
 
-                        if on_property is not None:
-                            if seed_variables:
-                                if all([self.__wrapper.is_filtered(seed, space, v) for v in seed_variables]):
-                                    continue
+                    new_parent = parent
+                    if on_property is not None:
+                        if seed_variables:
+                            if all([self.__wrapper.is_filtered(seed, space, v) for v in seed_variables]):
+                                continue
 
+                            new_parent = parent[:]
+                            new_parent.append((seed, on_property, seed_variables))
+
+                        if not next_seeds:
                             __process_link_seed(seed, tree_graph, on_property, next_seeds,
                                                 expected_types=expected_types)
 
-                        try:
-                            threads = []
-                            for s in next_seeds:
-                                __check_stop()
-                                try:
-                                    workers_queue.put_nowait(s)
-                                    future = pool.submit(__follow_node, n, s, tree_graph)
-                                    threads.append(future)
-                                except Queue.Full:
-                                    # If all threads are busy...I'll do it myself
-                                    __follow_node(n, s, tree_graph)
+                    try:
+                        threads = []
+                        for s in next_seeds:
+                            __check_stop()
+                            try:
+                                workers_queue.put_nowait(s)
+                                future = pool.submit(__follow_node, n, s, tree_graph, parent=new_parent)
+                                threads.append(future)
+                            except Queue.Full:
+                                # If all threads are busy...I'll do it myself
+                                __follow_node(n, s, tree_graph, parent=new_parent)
 
-                                if len(threads) >= workers:
-                                    wait(threads)
-                                    [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
-                                    threads = []
+                            if len(threads) >= workers:
+                                wait(threads)
+                                [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                                threads = []
 
-                            wait(threads)
-                            [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
-                            next_seeds.clear()
-                        except (IndexError, KeyError):
-                            traceback.print_exc()
+                        wait(threads)
+                        [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                        next_seeds.clear()
+                    except (IndexError, KeyError):
+                        traceback.print_exc()
 
                     for (tp, seed, object) in candidates:
                         quad = (tp, seed, tp.p, object)
@@ -654,16 +705,19 @@ class PlanExecutor(object):
                         predicate_pass[tp.p] = True
                         quads.add(quad)
 
-                    if candidates and (not predicate_pass or not all(predicate_pass.values())):
-                        quads.clear()
-                        break
-
-                    candidates.clear()
+                    try:
+                        if candidates and (not predicate_pass or not all(predicate_pass.values())):
+                            quads.clear()
+                            break
+                    finally:
+                        candidates.clear()
 
                 if all(predicate_pass.values()):
                     for q in quads:
                         __put_quad_in_queue(q)
-                else:
+                elif predicate_pass:
+                    for v in seed_variables:
+                        self.__wrapper.filter(seed, space, v)
                     quads.clear()
 
             except Queue.Full:

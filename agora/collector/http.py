@@ -24,6 +24,8 @@ import math
 import requests
 from StringIO import StringIO
 from requests.utils import parse_dict_header
+import email.utils as eut
+from datetime import datetime as dt
 
 __author__ = "Fernando Serena"
 
@@ -61,3 +63,18 @@ def http_get(uri, format):
         return StringIO(response.content), response.headers
     else:
         return response.status_code != 406
+
+
+def extract_ttl(headers):
+    ttl = None
+    cache_control = headers.get('Cache-Control', None)
+    if cache_control is not None:
+        cache_dict = parse_dict_header(cache_control)
+        ttl = int(math.ceil(float(cache_dict.get('max-age', ttl))))
+    else:
+        expires = headers.get('expires', None)
+        if expires is not None:
+            exp_dt = dt(*eut.parsedate(expires)[:6])
+            ttl = int(math.ceil((exp_dt - dt.now()).total_seconds()))
+
+    return ttl
