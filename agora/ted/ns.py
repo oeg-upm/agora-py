@@ -18,8 +18,9 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
-
-from agora.ted.blocks import TED
-from agora.ted.gateway import Gateway
+from rdflib import Namespace
 
 __author__ = 'Fernando Serena'
+
+WOT = Namespace('http://www.wot.org#')
+TED_NS = Namespace('http://ted.org#')

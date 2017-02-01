@@ -25,8 +25,9 @@ from flask import request, url_for
 from rdflib import Graph
 from rdflib import URIRef
 
+from agora.engine.plan.graph import AGORA
 from agora.server import Server
-from agora.ted import Gateway, TED_NS
+from agora.ted.gateway import Gateway
 
 __author__ = 'Fernando Serena'
 
@@ -52,7 +53,7 @@ def build(gateway, server=None, import_name=__name__):
         gateway_uri = URIRef(url_for('get_gateway', _external=True))
         for s_uri, type in gateway.seeds:
             r_uri = URIRef(s_uri)
-            g.add((gateway_uri, TED_NS.hasSeed, r_uri))
+            g.add((gateway_uri, AGORA.hasSeed, r_uri))
 
         return serialize(g)
 

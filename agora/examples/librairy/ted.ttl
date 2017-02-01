@@ -1,4 +1,4 @@
-@prefix core: <http://agora.org#> .
+@prefix ted: <http://ted.org#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xml: <http://www.w3.org/XML/1998/namespace> .
@@ -9,130 +9,130 @@
 @prefix librairy: <http://drinventor.dia.fi.upm.es/vocabulary#> .
 
 
-_:ted1 a core:TED ;
-    core:describesEcosystem _:eco .
+_:ted1 a ted:TED ;
+    ted:describesEcosystem _:eco .
 
-_:eco a core:Ecosystem ;
-    core:includes _:ds, _:ts .
+_:eco a ted:Ecosystem ;
+    ted:includes _:ds, _:ts .
 
 _:ds a librairy:DocumentService .
 _:ts a librairy:TopicService .
 
-_:td_ds a core:ThingDescription ;
-    core:identifier "ds" ;      
-    core:describes _:ds ;
-    core:hasMappingRelation [
-        a core:MappingRelation ;
-        core:forEndpoint [
+_:td_ds a ted:ThingDescription ;
+    ted:identifier "ds" ;      
+    ted:describes _:ds ;
+    ted:hasMappingRelation [
+        a ted:MappingRelation ;
+        ted:forEndpoint [
             a wot:Endpoint ;
             wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents"^^xsd:anyURI ;
             wot:mediaType "application/json"
         ] ;
-        core:hasMapping _:exposes_doc_map
+        ted:hasMapping _:exposes_doc_map
     ] .
 
-_:exposes_doc_map a core:Mapping ;
-    core:key "exposes" ;
-    core:predicate librairy:exposesDocument ;
-    core:valuesTransformedBy _:td_doc .
+_:exposes_doc_map a ted:Mapping ;
+    ted:key "exposes" ;
+    ted:predicate librairy:exposesDocument ;
+    ted:valuesTransformedBy _:td_doc .
 
-_:td_doc a core:ThingDescription ;
-    core:identifier "doc" ;
-    core:describes [
+_:td_doc a ted:ThingDescription ;
+    ted:identifier "doc" ;
+    ted:describes [
         a librairy:Document ;
         librairy:hasTopicDeals _:deal_container
     ] ;
-    core:hasMappingRelation [
-        a core:MappingRelation ;
-        core:forEndpoint [
+    ted:hasMappingRelation [
+        a ted:MappingRelation ;
+        ted:forEndpoint [
             a wot:Endpoint ;
             wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($item)}}" ;
             wot:mediaType "application/json"
         ] ;
-        core:hasMapping _:title_map , _:creation_map
+        ted:hasMapping _:title_map , _:creation_map
     ] .
 
-_:title_map a core:Mapping ;
-    core:key "title" ;
-    core:predicate librairy:title .
+_:title_map a ted:Mapping ;
+    ted:key "title" ;
+    ted:predicate librairy:title .
 
-_:creation_map a core:Mapping ;
-    core:key "creationTime" ;
-    core:predicate librairy:creationTime .
+_:creation_map a ted:Mapping ;
+    ted:key "creationTime" ;
+    ted:predicate librairy:creationTime .
 
-_:td_deal_container a core:ThingDescription ;
-    core:identifier "dcontainer" ;
-    core:describes _:deal_container ;
-    core:hasMappingRelation [
-        a core:MappingRelation ;
-        core:forEndpoint [
+_:td_deal_container a ted:ThingDescription ;
+    ted:identifier "dcontainer" ;
+    ted:describes _:deal_container ;
+    ted:hasMappingRelation [
+        a ted:MappingRelation ;
+        ted:forEndpoint [
             a wot:Endpoint ;
             wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($item)}}/topics" ;
             wot:mediaType "application/json"
         ] ;
-        core:hasMapping _:deal_map
+        ted:hasMapping _:deal_map
     ] .
 
 _:deal_container a librairy:TopicDealContainer .
 
-_:deal_map a core:Mapping ;
-    core:key "deals" ;
-    core:predicate librairy:contains ;
-    core:valuesTransformedBy _:td_deal .
+_:deal_map a ted:Mapping ;
+    ted:key "deals" ;
+    ted:predicate librairy:contains ;
+    ted:valuesTransformedBy _:td_deal .
 
-_:td_deal a core:ThingDescription ;
-    core:identifier "deal" ;
-    core:describes [
+_:td_deal a ted:ThingDescription ;
+    ted:identifier "deal" ;
+    ted:describes [
         a librairy:TopicDeal ;
         librairy:forTopic _:topic
     ] ;
-    core:hasMappingRelation [
-        a core:MappingRelation ;
-        core:forEndpoint [
+    ted:hasMappingRelation [
+        a ted:MappingRelation ;
+        ted:forEndpoint [
             a wot:Endpoint ;
             wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($parent)}}/topics/{{lslug($item)}}" ;
             wot:mediaType "application/json"
         ] ;
-        core:hasMapping _:weight_map
+        ted:hasMapping _:weight_map
     ] .
 
-_:weight_map a core:Mapping ;
-    core:key "weight" ;
-    core:predicate librairy:weight .
+_:weight_map a ted:Mapping ;
+    ted:key "weight" ;
+    ted:predicate librairy:weight .
 
-_:td_topic a core:ThingDescription ;
-    core:identifier "topic" ;
-    core:describes _:topic ;
-    core:hasMappingRelation [
-        a core:MappingRelation ;
-        core:forEndpoint [
+_:td_topic a ted:ThingDescription ;
+    ted:identifier "topic" ;
+    ted:describes _:topic ;
+    ted:hasMappingRelation [
+        a ted:MappingRelation ;
+        ted:forEndpoint [
             a wot:Endpoint ;
             wot:href "http://drinventor.dia.fi.upm.es/api/0.2/topics/{{lslug($item)}}" ;
             wot:mediaType "application/json"
         ] ;
-        core:hasMapping _:creation_map, _:content_map
+        ted:hasMapping _:creation_map, _:content_map
     ] .
 
 _:topic a librairy:Topic .
 
-_:content_map a core:Mapping ;
-    core:key "content" ;
-    core:predicate librairy:content .
+_:content_map a ted:Mapping ;
+    ted:key "content" ;
+    ted:predicate librairy:content .
 
-_:td_ts a core:ThingDescription ;
-    core:identifier "ts" ;
-    core:describes _:ts ;
-    core:hasMappingRelation [
-        a core:MappingRelation ;
-        core:forEndpoint [
+_:td_ts a ted:ThingDescription ;
+    ted:identifier "ts" ;
+    ted:describes _:ts ;
+    ted:hasMappingRelation [
+        a ted:MappingRelation ;
+        ted:forEndpoint [
             a wot:Endpoint ;
             wot:href "http://drinventor.dia.fi.upm.es/api/0.2/topics"^^xsd:anyURI ;
             wot:mediaType "application/json"
         ] ;
-        core:hasMapping _:exposes_topic_map
+        ted:hasMapping _:exposes_topic_map
     ] .
 
-_:exposes_topic_map a core:Mapping ;
-    core:key "exposes" ;
-    core:predicate librairy:exposesTopic ;
-    core:valuesTransformedBy _:td_topic .
+_:exposes_topic_map a ted:Mapping ;
+    ted:key "exposes" ;
+    ted:predicate librairy:exposesTopic ;
+    ted:valuesTransformedBy _:td_topic .

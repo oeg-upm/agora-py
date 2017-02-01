@@ -18,22 +18,20 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
-import base64
 import itertools
 from abc import abstractmethod
 from urlparse import urljoin
 
 from rdflib import ConjunctiveGraph
 from rdflib import Graph
-from rdflib import Namespace
 from rdflib import RDF
 from rdflib.term import Node, BNode
 
 from agora.ted.evaluate import find_params
+from agora.ted.ns import TED_NS, WOT
+from agora.ted.utils import encode_rdict
 
 __author__ = 'Fernando Serena'
-
-WOT = Namespace('http://www.wot.org#')
 
 
 def describe(graph, elm, filters=[], trace=None):
@@ -62,44 +60,67 @@ def describe(graph, elm, filters=[], trace=None):
 class Resource(object):
     def __init__(self, graph, node):
         # type: (Graph, any) -> None
-        self.__node = node
         self.__graph = ConjunctiveGraph()
         self.__types = set([])
         self.__vars = set([])
+        self.__endpoints = set([])
+        self.__graph = graph
+        self.__triples = Graph()
 
         for t in describe(graph, node):
-            self.__graph.add(t)
+            self.__triples.add(t)
 
-        self.__types = set(self.__graph.objects(self.__node, RDF.type))
         try:
-            self.__id = list(self.__graph.objects(self.__node, WOT.identifier)).pop().toPython()
+            self.__td_node = list(self.__graph.subjects(predicate=TED_NS.describes, object=node)).pop()
         except IndexError:
-            self.__id = self.__node.toPython()
+            self.__id = node.toPython()
+            self.__td_node = None
+        else:
+            try:
+                self.__id = list(self.__graph.objects(self.__td_node, TED_NS.identifier)).pop().toPython()
+            except IndexError:
+                self.__id = self.__td_node.toPython()
 
-        self._endpoints = set([])
-        for e_node in self.__graph.objects(self.__node, WOT.onEndpoint):
-            for endpoint in Endpoint.from_graph(self.__graph, e_node):
-                self._endpoints.add(endpoint)
-                ref = endpoint.href or endpoint.href
-                for param in find_params(str(ref)):
-                    self.__vars.add(param)
+        self.__node = node
+        self.__types = set(self.__graph.objects(self.__node, RDF.type))
 
-        self._includes = set([])
-        for i_node in self.__graph.objects(self.__node, WOT.includes):
-            include = Include.from_graph(self.__graph, i_node)
-            self._includes.add(include)
+        self.__mapping_relations = set([])
+        self.__enrichments = set([])
+        if self.__td_node is not None:
+            for mr_node in self.__graph.objects(self.__td_node, TED_NS.hasMappingRelation):
+                mr = MappingRelation.from_graph(self.__graph, mr_node)
+                self.__mapping_relations.add(mr)
+
+            self.__vars = reduce(lambda x, y: set.union(x, y), [mr.vars for mr in self.__mapping_relations], set([]))
+            self.__endpoints = set([mr.endpoint for mr in self.__mapping_relations])
+
+            for er_node in self.__graph.objects(self.__td_node, TED_NS.enrichesBy):
+                enrichment = Enrichment.from_graph(self.__graph, er_node)
+                self.__enrichments.add(enrichment)
+
+    def endpoint_mappings(self, e):
+        return reduce(lambda x, y: set.union(x, y),
+                      map(lambda x: x.mappings, filter(lambda x: x.endpoint == e, self.__mapping_relations)), set([]))
+
+    @property
+    def triples(self):
+        return self.__triples
+
+    @property
+    def mapping_relations(self):
+        return frozenset(self.__mapping_relations)
+
+    @property
+    def enrichments(self):
+        return frozenset(self.__enrichments)
 
     @property
     def base(self):
-        return frozenset(self._endpoints)
+        return frozenset(self.__endpoints)
 
     @property
     def types(self):
         return frozenset(self.__types)
-
-    @property
-    def includes(self):
-        return frozenset(self._includes)
 
     @property
     def graph(self):
@@ -110,6 +131,10 @@ class Resource(object):
         return self.__node
 
     @property
+    def td_node(self):
+        return self.__td_node
+
+    @property
     def id(self):
         return self.__id
 
@@ -118,22 +143,54 @@ class Resource(object):
         return frozenset(self.__vars)
 
 
-class Include(object):
+class Enrichment(object):
     def __init__(self):
         self.predicate = None
         self.object = None
 
     @staticmethod
     def from_graph(graph, node):
-        include = Include()
+        enrichment = Enrichment()
 
         try:
-            include.predicate = list(graph.objects(node, WOT.predicate)).pop()
-            include.object = list(graph.objects(node, WOT.object)).pop()
+            enrichment.predicate = list(graph.objects(node, TED_NS.predicate)).pop()
+            enrichment.object = list(graph.objects(node, TED_NS.valuesTransformedBy)).pop()
+            if (enrichment.object, RDF.type, TED_NS.ThingDescription) in graph:
+                enrichment.object = list(graph.objects(enrichment.object, TED_NS.describes)).pop()
         except IndexError:
             pass
 
-        return include
+        return enrichment
+
+
+class MappingRelation(object):
+    def __init__(self):
+        self.endpoint = None
+        self.mappings = set([])
+        self.__vars = set([])
+
+    @staticmethod
+    def from_graph(graph, node):
+        # type: (Graph, Node) -> iter
+        mr = MappingRelation()
+
+        try:
+            for m in graph.objects(node, TED_NS.hasMapping):
+                mr.mappings.add(Mapping.from_graph(graph, m))
+        except IndexError:
+            pass
+
+        e_node = list(graph.objects(node, TED_NS.forEndpoint)).pop()
+        mr.endpoint = Endpoint.from_graph(graph, e_node)
+        ref = mr.endpoint.href
+        for param in find_params(str(ref)):
+            mr.__vars.add(param)
+
+        return mr
+
+    @property
+    def vars(self):
+        return frozenset(self.__vars)
 
 
 class Endpoint(object):
@@ -146,7 +203,7 @@ class Endpoint(object):
 
     @staticmethod
     def from_graph(graph, node):
-        # type: (Graph, Node, frozenset) -> iter
+        # type: (Graph, Node) -> iter
         endpoint = Endpoint()
         try:
             endpoint.media = list(graph.objects(node, WOT.mediaType)).pop()
@@ -154,23 +211,17 @@ class Endpoint(object):
             pass
 
         try:
-            endpoint.path = list(graph.objects(node, WOT.jsonPath)).pop()
-        except IndexError:
-            pass
-
-        try:
-            for m in graph.objects(node, WOT.mapping):
-                endpoint.mappings.add(Mapping.from_graph(graph, m))
+            endpoint.path = list(graph.objects(node, TED_NS.jsonPath)).pop()
         except IndexError:
             pass
 
         try:
             endpoint.href = list(graph.objects(node, WOT.href)).pop()
-            yield endpoint
         except IndexError:
-            for href in graph.objects(node, WOT.withHRef):
-                endpoint.whref = href
-                yield endpoint
+            whref = list(graph.objects(node, WOT.withHRef)).pop()
+            endpoint.whref = whref
+
+        return endpoint
 
     def __add__(self, other):
         endpoint = Endpoint()
@@ -194,13 +245,13 @@ class Mapping(object):
         mapping = Mapping()
 
         try:
-            mapping.predicate = list(graph.objects(node, WOT.predicate)).pop()
-            mapping.key = list(graph.objects(node, WOT.key)).pop().toPython()
+            mapping.predicate = list(graph.objects(node, TED_NS.predicate)).pop()
+            mapping.key = list(graph.objects(node, TED_NS.key)).pop().toPython()
         except IndexError:
             pass
 
         try:
-            mapping.transform = create_transform(graph, list(graph.objects(node, WOT.valueTransform)).pop())
+            mapping.transform = create_transform(graph, list(graph.objects(node, TED_NS.valuesTransformedBy)).pop())
         except IndexError:
             pass
 
@@ -208,7 +259,7 @@ class Mapping(object):
 
 
 def create_transform(graph, node):
-    if list(graph.triples((node, WOT.onEndpoint, None))):
+    if list(graph.triples((node, RDF.type, TED_NS.ThingDescription))):
         return ResourceTransform.from_graph(graph, node)
 
 
@@ -227,13 +278,13 @@ class Transform(object):
         pass
 
 
-def encode_rdict(rd):
-    sorted_keys = sorted(rd.keys())
-    sorted_fields = []
-    for k in sorted_keys:
-        sorted_fields.append('"%s": "%s"' % (str(k), str(rd[k])))
-    str_rd = '{' + ','.join(sorted_fields) + '}'
-    return base64.b64encode(str_rd)
+# def encode_rdict(rd):
+#     sorted_keys = sorted(rd.keys())
+#     sorted_fields = []
+#     for k in sorted_keys:
+#         sorted_fields.append('"%s": "%s"' % (str(k), str(rd[k])))
+#     str_rd = '{' + ','.join(sorted_fields) + '}'
+#     return base64.b64encode(str_rd)
 
 
 class ResourceTransform(Transform):
@@ -244,7 +295,7 @@ class ResourceTransform(Transform):
     @staticmethod
     def from_graph(graph, node):
         transform = ResourceTransform()
-        transform.resource_node = node
+        transform.resource_node = list(graph.objects(node, TED_NS.describes)).pop()
         return transform
 
     def apply(self, data, *args, **kwargs):
@@ -262,3 +313,44 @@ class ResourceTransform(Transform):
             res = [uri_provider(self.resource_node, encode_rdict(merge({"$item": v}, base_rdict))) for v in data]
             return res  # [:min(3, len(res))]
         return data
+
+
+class TED(object):
+    def __init__(self, graph):
+        self.__ecosystem = Ecosystem(graph)
+
+    @property
+    def ecosystem(self):
+        return self.__ecosystem
+
+
+class Ecosystem(object):
+    def __init__(self, graph):
+        # type: (Graph) -> None
+        try:
+            self.__node = list(graph.subjects(RDF.type, TED_NS.Ecosystem)).pop()
+        except IndexError:
+            raise ValueError('Ecosystem node not found')
+
+        self.__resources = set([])
+        self.__roots = set([])
+
+        root_nodes = set([])
+        for r_node in graph.objects(self.__node, TED_NS.includes):
+            resource = Resource(graph, r_node)
+            self.__resources.add(resource)
+            self.__roots.add(resource)
+            root_nodes.add(r_node)
+
+        for r_node in graph.objects(predicate=TED_NS.describes):
+            if r_node not in root_nodes:
+                resource = Resource(graph, r_node)
+                self.__resources.add(resource)
+
+    @property
+    def things(self):
+        return frozenset(self.__resources)
+
+    @property
+    def roots(self):
+        return frozenset(self.__roots)

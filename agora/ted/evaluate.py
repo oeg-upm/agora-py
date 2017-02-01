@@ -66,7 +66,6 @@ def find_params(expr):
     try:
         first = True
         for part in expr.split('$'):
-
             if part:
                 if not first or expr[0] == '$':
                     tokens = wrap_param.parseString('$' + part)
