@@ -47,7 +47,7 @@ class Context(object):
 
     def __eq__(self, other):
         if isinstance(other, Context):
-            return self.map == other.map
+            return self.map.items() == other.map.items()
         return False
 
     def __contains__(self, item):
@@ -124,19 +124,24 @@ def __joins(c, x):
     return bool(intersection)
 
 
-def __eval_delta(c, graph, roots, variables):
-    # type: (Context, nx.DiGraph) -> iter
-
-    def common_descendants(c, x):
-        for dx in nx.descendants(graph, x):
-            for dc in nx.descendants(graph, c):
-                if dx == dc:
-                    if graph.out_degree(dx) > 0:
-                        return True
+def common_descendants(graph, x, c, base):
+    if base:
         return False
+    for dx in nx.descendants(graph, c):
+        for dc in nx.descendants(graph, x):
+            if dx.map == dc.map:
+                return True
+                # if graph.out_degree(dx) > 0:
+                #     return True
+    return False
 
-    def filter_successor(x):
-        return c.map != x.map and __joins(c, x) and not common_descendants(c, x)
+
+def filter_successor(graph, c, x, base):
+    return c.map != x.map and __joins(c, x) and not common_descendants(graph, c, x, base)
+
+
+def __eval_delta(c, graph, roots, variables, base=False):
+    # type: (Context, nx.DiGraph) -> iter
 
     def union(x, y):
         r = ContextCollection()
@@ -150,8 +155,11 @@ def __eval_delta(c, graph, roots, variables):
 
     root_candidates = reduce(lambda x, y: union(x, set(graph.successors(y))), roots, set())
     for root in root_candidates:
-        if filter_successor(root):
+        if filter_successor(graph, c, root, base):
             inter = __exploit(root, c)
+            if inter in graph.nodes():
+                # This should not happen!!
+                continue
             graph.add_edge(root, inter)
             graph.add_edge(c, inter)
             if len(inter.variables) == len(variables):
@@ -192,6 +200,5 @@ def incremental_eval_bgp(ctx, bgp):
                 yield __query_context(ctx, c).solution()
             else:
                 if isinstance(tp.o, Variable) and isinstance(tp.s, Variable):
-                    for solution in __eval_delta(c, dgraph, c.variables, variables):
+                    for solution in __eval_delta(c, dgraph, c.variables, variables, base=True):
                         yield __query_context(ctx, solution).solution()
-

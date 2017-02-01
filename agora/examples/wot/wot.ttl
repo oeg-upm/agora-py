@@ -5,12 +5,15 @@
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix ssn: <http://purl.oclc.org/NET/ssnx/ssn#> .
+@prefix sch: <http://schema.org/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix geo: <http://www.w3.org/2003/01/geo/wgs84_pos#> .
 
 <http://www.wot.org> rdf:type owl:Ontology .
 
 wot:Service a owl:Class .
 
-wot:WebThing a owl:Class ;
+wot:Thing a owl:Class ;
         rdfs:subClassOf [
                             rdf:type owl:Restriction ;
                             owl:onProperty wot:identifier ;
@@ -37,15 +40,38 @@ wot:WebThing a owl:Class ;
                             owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
                         ] .
 
-wot:hasWebThingProperty a owl:ObjectProperty ;
-    rdfs:domain wot:WebThing ;
-    rdfs:range wot:WebThingProperty .
+sch:Place a owl:Class ;
+        rdfs:subClassOf [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty foaf:name ;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty geo:lat;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ],
+                        [
+                            rdf:type owl:Restriction ;
+                            owl:onProperty geo:long;
+                            owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger
+                        ] .
 
-wot:hasWebThingAction a owl:ObjectProperty ;
-    rdfs:domain wot:WebThing ;
-    rdfs:range wot:WebThingAction .
+geo:lat a owl:DatatypeProperty ;
+        rdfs:range xsd:float .
 
-wot:WebThingProperty a owl:Class ;
+
+geo:long a owl:DatatypeProperty ;
+        rdfs:range xsd:float .
+
+foaf:name a owl:DatatypeProperty ;
+        rdfs:range xsd:string .
+
+wot:offersInteraction a owl:ObjectProperty ;
+    rdfs:domain wot:Thing ;
+    rdfs:range wot:Property .
+
+wot:Property a owl:Class ;
     rdfs:subClassOf [
                         rdf:type owl:Restriction ;
                         owl:onProperty rdfs:label ;
@@ -63,7 +89,7 @@ wot:WebThingProperty a owl:Class ;
                         owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger
                     ].
 
-wot:WebThingAction a owl:Class ;
+wot:Action a owl:Class ;
     rdfs:subClassOf [
                         rdf:type owl:Restriction ;
                         owl:onProperty rdfs:label ;
@@ -113,7 +139,7 @@ wot:System a owl:Class ;
                     ] .
 
 wot:encapsulatesSystem a owl:ObjectProperty ;
-    rdfs:domain wot:WebThing ;
+    rdfs:domain wot:Thing ;
     rdfs:range wot:System .
 
 wot:Device a owl:Class ;
@@ -149,7 +175,7 @@ wot:Actuator a owl:Class ;
                     ] .
 
 wot:managesActuator a owl:ObjectProperty ;
-    rdfs:domain wot:WebThingAction ;
+    rdfs:domain wot:Action ;
     rdfs:range wot:Actuator .
 
 ssn:Sensor a owl:Class ;
@@ -178,7 +204,7 @@ wot:affects a owl:ObjectProperty ;
     rdfs:range ssn:Property .
 
 wot:observedBy a owl:ObjectProperty ;
-    rdfs:domain wot:WebThingProperty ;
+    rdfs:domain wot:Property ;
     rdfs:range ssn:Sensor .
 
 wot:hasEntry a owl:ObjectProperty ;
@@ -193,7 +219,7 @@ wot:hasLog a owl:ObjectProperty ;
 
 wot:exposesWebThing a owl:ObjectProperty ;
     rdfs:domain wot:Service ;
-    rdfs:range wot:WebThing .
+    rdfs:range wot:Thing .
 
 wot:length a owl:DatatypeProperty ;
     rdfs:range xsd:long .
@@ -205,7 +231,7 @@ wot:name a owl:DatatypeProperty ;
     rdfs:range xsd:string .
 
 wot:creationDate a owl:DatatypeProperty ;
-    rdfs:domain wot:WebThing ;
+    rdfs:domain wot:Thing ;
     rdfs:range xsd:dateTime .
 
 wot:description a owl:DatatypeProperty ;
@@ -222,7 +248,7 @@ wot:entryTimeStamp a owl:DatatypeProperty ;
     rdfs:range xsd:dateTime .
 
 wot:represents a owl:ObjectProperty ;
-    rdfs:domain wot:WebThingProperty ;
+    rdfs:domain wot:Property ;
     rdfs:range ssn:Property .
 
 wot:units a owl:ObjectProperty ;

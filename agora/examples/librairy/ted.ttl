@@ -1,4 +1,4 @@
-@prefix ted: <http://agora.org/ted#> .
+@prefix core: <http://agora.org#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xml: <http://www.w3.org/XML/1998/namespace> .
@@ -9,96 +9,130 @@
 @prefix librairy: <http://drinventor.dia.fi.upm.es/vocabulary#> .
 
 
-_:ted1 a ted:TED ;
-       ted:describesEcosystem _:eco .
+_:ted1 a core:TED ;
+    core:describesEcosystem _:eco .
 
-_:eco a ted:Ecosystem ;
-      ted:includes _:ds, _:ts .
+_:eco a core:Ecosystem ;
+    core:includes _:ds, _:ts .
 
-_:ds a librairy:DocumentService ;
-      wot:identifier "ds" ;
-      wot:onEndpoint [
-          wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents"^^xsd:anyURI ;
-          wot:mediaType "application/json" ;
-          wot:mapping _:exposesDocMap
-      ] .
+_:ds a librairy:DocumentService .
+_:ts a librairy:TopicService .
 
-_:exposesDocMap a wot:Mapping ;
-      wot:key "exposes" ;
-      wot:predicate librairy:exposesDocument ;
-      wot:valueTransform _:doc .
-
-_:doc a librairy:Document ;
-      wot:identifier "doc" ;
-      wot:onEndpoint [
-        wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($item)}}" ;
-        wot:mediaType "application/json" ;
-        wot:mapping _:titleMap , _:creationMap
-      ] ;
-      wot:includes [
-        wot:predicate librairy:hasTopicDeals ;
-        wot:object _:dealContainer
-      ] .
-
-_:titleMap a wot:Mapping ;
-      wot:key "title" ;
-      wot:predicate librairy:title .
-
-_:creationMap a wot:Mapping ;
-      wot:key "creationTime" ;
-      wot:predicate librairy:creationTime .
-
-_:dealContainer a librairy:TopicDealContainer ;
-        wot:identifier "dcontainer" ;
-        wot:onEndpoint [
-            wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($item)}}/topics" ;
-            wot:mediaType "application/json" ;
-            wot:mapping _:topicDealMap
-          ] .
-
-_:topicDealMap a wot:Mapping ;
-      wot:key "deals" ;
-      wot:predicate librairy:contains ;
-      wot:valueTransform _:deal .
-
-_:deal a librairy:TopicDeal ;
-        wot:identifier "deal" ;
-        wot:onEndpoint [
-            wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($parent)}}/topics/{{lslug($item)}}" ;
-            wot:mediaType "application/json" ;
-            wot:mapping _:weightMap ;
+_:td_ds a core:ThingDescription ;
+    core:identifier "ds" ;      
+    core:describes _:ds ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
+            wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents"^^xsd:anyURI ;
+            wot:mediaType "application/json"
         ] ;
-        wot:includes [
-            wot:predicate librairy:forTopic ;
-            wot:object _:topic
-        ] .
+        core:hasMapping _:exposes_doc_map
+    ] .
 
-_:weightMap a wot:Mapping ;
-      wot:key "weight" ;
-      wot:predicate librairy:weight .
+_:exposes_doc_map a core:Mapping ;
+    core:key "exposes" ;
+    core:predicate librairy:exposesDocument ;
+    core:valuesTransformedBy _:td_doc .
 
-_:topic a librairy:Topic ;
-        wot:identifier "topic" ;
-        wot:onEndpoint _:topicEnd .
+_:td_doc a core:ThingDescription ;
+    core:identifier "doc" ;
+    core:describes [
+        a librairy:Document ;
+        librairy:hasTopicDeals _:deal_container
+    ] ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
+            wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($item)}}" ;
+            wot:mediaType "application/json"
+        ] ;
+        core:hasMapping _:title_map , _:creation_map
+    ] .
 
-_:topicEnd a wot:Endpoint ;
-      wot:href "http://drinventor.dia.fi.upm.es/api/0.2/topics/{{lslug($item)}}" ;
-      wot:mediaType "application/json" ;
-      wot:mapping _:creationMap, _:contentMap .
+_:title_map a core:Mapping ;
+    core:key "title" ;
+    core:predicate librairy:title .
 
-_:contentMap a wot:Mapping ;
-      wot:key "content" ;
-      wot:predicate librairy:content .
+_:creation_map a core:Mapping ;
+    core:key "creationTime" ;
+    core:predicate librairy:creationTime .
 
-_:ts a librairy:TopicService ;
-      wot:identifier "ts" ;
-      wot:onEndpoint [
-          wot:href "http://drinventor.dia.fi.upm.es/api/0.2/topics"^^xsd:anyURI ;
-          wot:mediaType "application/json" ;
-          wot:mapping _:exposesTopicMap
-      ] .
+_:td_deal_container a core:ThingDescription ;
+    core:identifier "dcontainer" ;
+    core:describes _:deal_container ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
+            wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($item)}}/topics" ;
+            wot:mediaType "application/json"
+        ] ;
+        core:hasMapping _:deal_map
+    ] .
 
-_:exposesTopicMap a wot:Mapping ;
-      wot:key "exposes" ;
-      wot:predicate librairy:exposesTopic ;
-      wot:valueTransform _:topic .
+_:deal_container a librairy:TopicDealContainer .
+
+_:deal_map a core:Mapping ;
+    core:key "deals" ;
+    core:predicate librairy:contains ;
+    core:valuesTransformedBy _:td_deal .
+
+_:td_deal a core:ThingDescription ;
+    core:identifier "deal" ;
+    core:describes [
+        a librairy:TopicDeal ;
+        librairy:forTopic _:topic
+    ] ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
+            wot:href "http://drinventor.dia.fi.upm.es/api/0.2/documents/{{lslug($parent)}}/topics/{{lslug($item)}}" ;
+            wot:mediaType "application/json"
+        ] ;
+        core:hasMapping _:weight_map
+    ] .
+
+_:weight_map a core:Mapping ;
+    core:key "weight" ;
+    core:predicate librairy:weight .
+
+_:td_topic a core:ThingDescription ;
+    core:identifier "topic" ;
+    core:describes _:topic ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
+            wot:href "http://drinventor.dia.fi.upm.es/api/0.2/topics/{{lslug($item)}}" ;
+            wot:mediaType "application/json"
+        ] ;
+        core:hasMapping _:creation_map, _:content_map
+    ] .
+
+_:topic a librairy:Topic .
+
+_:content_map a core:Mapping ;
+    core:key "content" ;
+    core:predicate librairy:content .
+
+_:td_ts a core:ThingDescription ;
+    core:identifier "ts" ;
+    core:describes _:ts ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
+            wot:href "http://drinventor.dia.fi.upm.es/api/0.2/topics"^^xsd:anyURI ;
+            wot:mediaType "application/json"
+        ] ;
+        core:hasMapping _:exposes_topic_map
+    ] .
+
+_:exposes_topic_map a core:Mapping ;
+    core:key "exposes" ;
+    core:predicate librairy:exposesTopic ;
+    core:valuesTransformedBy _:td_topic .

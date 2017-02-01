@@ -1,4 +1,4 @@
-@prefix ted: <http://agora.org/ted#> .
+@prefix core: <http://agora.org#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xml: <http://www.w3.org/XML/1998/namespace> .
@@ -8,70 +8,87 @@
 @prefix wot: <http://www.wot.org#> .
 
 
-_:ted1 a ted:TED ;
-       ted:describesEcosystem _:eco .
+_:ted1 a core:TED ;
+    core:describesEcosystem _:eco .
 
-_:eco a ted:Ecosystem ;
-      ted:includes _:service .
+_:eco a core:Ecosystem ;
+    core:includes _:service, <http://es.dbpedia.org/resource/Madrid>,
+                             <http://es.dbpedia.org/resource/A%C3%B1ora> .
 
-_:service a wot:Service ;
-      wot:identifier "service" ;
-      wot:onEndpoint [
-        wot:href "http://localhost:5005/things"^^xsd:anyURI ;
-          wot:mediaType "application/json" ;
-          wot:mapping _:exposesWT
-      ] .
+<http://es.dbpedia.org/resource/Madrid> a <http://schema.org/Place> .
+<http://es.dbpedia.org/resource/A%C3%B1ora> a <http://schema.org/Place> .
 
-_:exposesWT a wot:Mapping ;
-      wot:key "exposesWebThing" ;
-      wot:predicate wot:exposesWebThing ;
-      wot:valueTransform _:stars .
+_:service a wot:Service .
 
-_:stars a wot:Thing ;
-      wot:identifier "stars" ;
-      wot:onEndpoint [
-          wot:href "$item" ;
-          wot:mediaType "application/json" ;
-          wot:mapping _:idMap , _:creationMap, _:hasWPMap
-      ] ;
-      wot:includes [
-          wot:predicate wot:location ;
-          wot:object <http://es.dbpedia.org/resource/Madrid>
-      ] .
+_:td_service a core:ThingDescription ;
+    core:identifier "service" ;
+    core:describes _:service ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
+            wot:href "http://localhost:5005/things"^^xsd:anyURI ;
+            wot:mediaType "application/json"
+        ] ;
+        core:hasMapping [
+            a core:Mapping ;
+            core:key "exposesWebThing" ;
+            core:predicate wot:exposesWebThing ;
+            core:valuesTransformedBy _:td_stars
+        ]
+    ] .
 
-_:labelMap a wot:Mapping ;
-      wot:key "label" ;
-      wot:predicate rdfs:label .
-
-_:idMap a wot:Mapping ;
-      wot:key "identifier" ;
-      wot:predicate wot:identifier .
-
-_:creationMap a wot:Mapping ;
-      wot:key "creationDate" ;
-      wot:predicate wot:creationDate .
-
-_:hasWPMap a wot:Mapping ;
-      wot:key "hasWebThingProperty" ;
-      wot:predicate wot:offersInteraction ;
-      wot:valueTransform [
-          a wot:Property ;
-          wot:identifier "property" ;
-          wot:onEndpoint [
+_:td_stars a core:ThingDescription ;
+    core:identifier "stars" ;
+    core:describes [ a wot:Thing ] ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
             wot:href "$item" ;
-            wot:mediaType "application/json" ;
-            wot:mapping _:labelMap, _:tsMap, _:latestMap, _:valueMap
-          ]
-      ] .
+            wot:mediaType "application/json"
+        ] ;
+        core:hasMapping _:id_map, _:creation_map, _:property_map
+    ] .
 
-_:tsMap a wot:Mapping ;
-      wot:key "entryTimeStamp" ;
-      wot:predicate wot:entryTimeStamp .
+_:id_map a core:Mapping ;
+    core:key "identifier" ;
+    core:predicate wot:identifier .
 
-_:valueMap a wot:Mapping ;
-      wot:key "value" ;
-      wot:predicate wot:value .
+_:creation_map a core:Mapping ;
+    core:key "creationDate" ;
+    core:predicate wot:creationDate .
 
-_:latestMap a wot:Mapping ;
-      wot:key "hasLatestEntry" ;
-      wot:predicate wot:hasLatestEntry .
+_:property_map a core:Mapping ;
+    core:key "hasWebThingProperty" ;
+    core:predicate wot:offersInteraction ;
+    core:valuesTransformedBy _:td_property .
+
+_:td_property a core:ThingDescription ;
+    core:identifier "property" ;
+    core:describes [ a wot:Property ] ;
+    core:hasMappingRelation [
+        a core:MappingRelation ;
+        core:forEndpoint [
+            a wot:Endpoint ;
+            wot:href "$item" ;
+            wot:mediaType "application/json"
+        ] ;
+        core:hasMapping _:label_map, _:ts_map, _:latest_map, _:value_map
+    ] .
+
+_:label_map a core:Mapping ;
+    core:key "label" ;
+    core:predicate rdfs:label .
+
+_:ts_map a core:Mapping ;
+    core:key "entryTimeStamp" ;
+    core:predicate wot:entryTimeStamp .
+
+_:value_map a core:Mapping ;
+    core:key "value" ;
+    core:predicate wot:value .
+
+_:latest_map a core:Mapping ;
+    core:key "hasLatestEntry" ;
+    core:predicate wot:hasLatestEntry .
