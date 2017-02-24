@@ -27,39 +27,39 @@ from rdflib import URIRef
 
 from agora.engine.plan.graph import AGORA
 from agora.server import Server
-from agora.ted.gateway import Gateway
+from agora.ted import Proxy
 
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.ted.publish')
 
 
-def build(gateway, server=None, import_name=__name__):
-    # type: (Gateway, Server, str) -> AgoraServer
+def build(proxy, server=None, import_name=__name__):
+    # type: (Proxy, Server, str) -> AgoraServer
 
     if server is None:
         server = Server(import_name)
 
     def serialize(g):
         turtle = g.serialize(format='turtle')
-        gw_host = gateway.host + '/'
+        gw_host = proxy.host + '/'
         if gw_host != request.host_url:
-            turtle = turtle.replace(gateway.host + '/', request.host_url)
+            turtle = turtle.replace(proxy.host + '/', request.host_url)
         return turtle
 
-    @server.get(gateway.path, produce_types=('text/turtle', 'text/html'))
-    def get_gateway():
+    @server.get(proxy.path, produce_types=('text/turtle', 'text/html'))
+    def get_proxy():
         g = Graph()
-        gateway_uri = URIRef(url_for('get_gateway', _external=True))
-        for s_uri, type in gateway.seeds:
+        proxy_uri = URIRef(url_for('get_proxy', _external=True))
+        for s_uri, type in proxy.seeds:
             r_uri = URIRef(s_uri)
-            g.add((gateway_uri, AGORA.hasSeed, r_uri))
+            g.add((proxy_uri, AGORA.hasSeed, r_uri))
 
         return serialize(g)
 
-    @server.get('{}/<path:rid>'.format(gateway.path), produce_types=('text/turtle', 'text/html'))
+    @server.get('{}/<path:rid>'.format(proxy.path), produce_types=('text/turtle', 'text/html'))
     def get_gw_resource(rid):
-        g, headers = gateway.load(gateway.base + '/' + rid)
+        g, headers = proxy.load(proxy.base + '/' + rid)
         return serialize(g)
 
     return server

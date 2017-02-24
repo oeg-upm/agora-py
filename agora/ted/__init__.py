@@ -20,6 +20,6 @@
 """
 
 from agora.ted.blocks import TED
-from agora.ted.gateway import Gateway
+from agora.ted.proxy import Proxy
 
 __author__ = 'Fernando Serena'

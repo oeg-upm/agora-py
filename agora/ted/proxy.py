@@ -34,6 +34,7 @@ from agora.collector.http import extract_ttl
 from agora.collector.wrapper import ResourceWrapper
 from agora.engine.fountain import AbstractFountain
 from agora.engine.plan.agp import extend_uri
+from agora.ted import TED
 from agora.ted.evaluate import evaluate
 from agora.ted.ns import TED_NS
 from agora.ted.utils import encode_rdict
@@ -104,8 +105,8 @@ def ld_triples(ld, g=None):
     return g
 
 
-class Gateway(object):
-    def __init__(self, ted, fountain, server_name='gateway', url_scheme='http', server_port=None, path=''):
+class Proxy(object):
+    def __init__(self, ted, fountain, server_name='proxy', url_scheme='http', server_port=None, path=''):
         # type: (TED) -> None
         self.__ted = ted
         self.__fountain = fountain

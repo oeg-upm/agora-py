@@ -12,7 +12,7 @@ from agora.server.fragment import build as bf
 from agora.server.planner import build as bp
 from agora.server.publish import build as bh
 from agora.server.sparql import build as bs
-from agora.ted import TED, Gateway
+from agora.ted import TED, Proxy
 from agora.ted.publish import build as bg
 
 setup_logging(logging.DEBUG)
@@ -50,18 +50,18 @@ with open('librairy.ttl') as f:
         pass
 
 ted = TED(g)
-gw = Gateway(ted, agora.fountain, server_name='localhost', server_port=5000, path='/gateway')
-bg(gw, server=server)
+proxy = Proxy(ted, agora.fountain, server_name='localhost', server_port=5000, path='/gateway')
+bg(proxy, server=server)
 
 agora.fountain.delete_type_seeds('librairy:DocumentService')
 agora.fountain.delete_type_seeds('librairy:TopicService')
-for uri, type in gw.seeds:
+for uri, type in proxy.seeds:
     try:
         agora.fountain.add_seed(uri, type)
     except:
         pass
 
-scholar = Scholar(agora.planner, cache=cache, loader=gw.load)
+scholar = Scholar(agora.planner, cache=cache, loader=proxy.load)
 
 if __name__ == '__main__':
     server.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False, threaded=True)
