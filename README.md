@@ -1,16 +1,99 @@
-agora-py
-==============
-A Python library for Web-scale Ontology-driven Access to Distributed Linked Data.
+# agora-py
+<img src="https://dl.dropboxusercontent.com/u/1731751/agora/agora.png" width="200" align="right" alt="" />
 
-<p align="center">
-    <img src="docs/img/agora.png">
-</p>
+**agora-py** is a Python library that supports *Web-scale Ontology-driven Access to Distributed Linked Data*.
 
-<p align="center" style="font-size: 24px">
-Web-scale Ontology-based Access to Distributed Linked Data
-</p>
+Currently, there is a huge number of *dereferenciable* Linked Data resources that are not being properly consumed neither explored.
+That is, the absolute majority of approaches for consuming Linked Data either ignore or inhibit such virtue, 
+underutilizing the Web as a platform.  
+Agora (agora-py) aims to be a tool that enables Linked Data consumers to live-query the Web of Data in a unified and explorative way:
+* Driven by known vocabularies;
+* Constrained by
+   * the scope of the given query,
+   * a set of seed resources whose URIs and types are known.
+    
+Although Agora is designed as well to be deployed as a microservices infrastructure, 
+it can be fully used as a Python middleware, without the need for any other external dependency than the Web of Data. 
 
-## Introduction
+## Install
+
+agora-py is still not uploaded to PyPi, however the current repository
+can be passed as source for pip:
+
+```
+$ pip install git+https://github.com/oeg-upm/agora-py.git
+```
+
+## Getting Started
+
+Before issuing the first query, Agora needs to know the following:
+1. The vocabulary that will drive the exploration;
+2. One seed resource whose URI and type (any Class in the vocabulary) is known.
+
+### Register vocabularies
+
+**agora-py** requires to be provided with the vocabularies (RDFS, OWL) that will be used
+to drive the exploration of Linked Data resources.
+
+```python
+from agora import Agora
+
+a = Agora()
+
+# movies.ttl is in path agora/examples/movies/movies.ttl
+with open('movies.ttl') as f:
+    a.fountain.add_vocabulary(f.read())
+
+print a.fountain.types
+
+```
+
+### Declare seeds
+
+Once Agora is provided with a vocabulary that defines at least one Class, seed
+resources can be declared as follows:
+
+```python
+from agora import Agora
+
+a = Agora()
+with open('movies.ttl') as f:
+    a.fountain.add_vocabulary(f.read())
+
+a.fountain.add_seed('http://dbpedia.org/resource/Blade_Runner', 'dbpedia-owl:Film')
+a.fountain.add_seed('http://dbpedia.org/resource/Braveheart', 'dbpedia-owl:Film')
+print a.fountain.seeds
+
+```
+
+### Query the Web
+
+Agora enables Linked Data consumers to live-query the Web of Data using
+SPARQL. The given queries (in fact, their BGP and filters) together with the registered 
+vocabularies and provided seeds, define the scope of the link-traversal exploration.
+
+```python
+from agora import Agora
+
+a = Agora()
+with open('movies.ttl') as f:
+    a.fountain.add_vocabulary(f.read())
+
+a.fountain.add_seed('http://dbpedia.org/resource/Blade_Runner', 'dbpedia-owl:Film')
+a.fountain.add_seed('http://dbpedia.org/resource/Braveheart', 'dbpedia-owl:Film')
+
+query = """SELECT DISTINCT ?name ?actor WHERE { 
+                [] foaf:name ?name ;
+                   dbpedia-owl:starring [
+                       dbp:birthName ?actor
+                   ]
+           }"""
+           
+for row in a.query(query):
+    print row
+```
+
+## Background
 
 ### Linked Data
 
@@ -96,7 +179,7 @@ The agora was the centre of athletic, artistic, spiritual and political life of 
     <img src="docs/img/concept.png" title="Concept of Agora">
 </p>
 
-## Agora Engine
+## How it works
 The simplest Agora Engine is composed by a Fountain and a Planner.
 
 <p align="center">
