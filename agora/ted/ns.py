@@ -22,5 +22,6 @@ from rdflib import Namespace
 
 __author__ = 'Fernando Serena'
 
-WOT = Namespace('http://www.wot.org#')
-TED_NS = Namespace('http://ted.org#')
+WOT = Namespace('http://iot.linkeddata.es/def/wot#')
+MAP = Namespace('http://iot.linkeddata.es/def/wot-mappings#')
+CORE = Namespace('http://iot.linkeddata.es/def/core#')

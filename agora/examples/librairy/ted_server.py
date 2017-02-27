@@ -50,7 +50,7 @@ with open('librairy.ttl') as f:
         pass
 
 ted = TED(g)
-proxy = Proxy(ted, agora.fountain, server_name='localhost', server_port=5000, path='/gateway')
+proxy = Proxy(ted, agora.fountain, server_name='localhost', server_port=5000, path='/proxy')
 bg(proxy, server=server)
 
 agora.fountain.delete_type_seeds('librairy:DocumentService')

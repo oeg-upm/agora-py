@@ -1,4 +1,4 @@
-@prefix wot: <http://www.wot.org#> .
+@prefix wot: <http://iot.linkeddata.es/def/wot#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xml: <http://www.w3.org/XML/1998/namespace> .
@@ -9,7 +9,7 @@
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix geo: <http://www.w3.org/2003/01/geo/wgs84_pos#> .
 
-<http://www.wot.org> rdf:type owl:Ontology .
+<http://iot.linkeddata.es/def/wot#> rdf:type owl:Ontology .
 
 wot:Service a owl:Class .
 

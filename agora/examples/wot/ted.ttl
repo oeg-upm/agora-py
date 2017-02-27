@@ -1,18 +1,19 @@
-@prefix ted: <http://ted.org#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xml: <http://www.w3.org/XML/1998/namespace> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix wot: <http://www.wot.org#> .
+@prefix wot: <http://iot.linkeddata.es/def/wot#> .
+@prefix map: <http://iot.linkeddata.es/def/wot-mappings#> .
+@prefix core: <http://iot.linkeddata.es/def/core#> .
 
 
-_:ted1 a ted:TED ;
-    ted:describesEcosystem _:eco .
+_:ted1 a core:ThingEcosystemDescription ;
+    core:describes _:eco .
 
-_:eco a ted:Ecosystem ;
-    ted:includes _:service, <http://es.dbpedia.org/resource/Madrid>,
+_:eco a core:Ecosystem ;
+    core:hasComponent _:service, <http://es.dbpedia.org/resource/Madrid>,
                              <http://es.dbpedia.org/resource/A%C3%B1ora> .
 
 <http://es.dbpedia.org/resource/Madrid> a <http://schema.org/Place> .
@@ -20,75 +21,75 @@ _:eco a ted:Ecosystem ;
 
 _:service a wot:Service .
 
-_:td_service a ted:ThingDescription ;
-    ted:identifier "service" ;
-    ted:describes _:service ;
-    ted:hasMappingRelation [
-        a ted:MappingRelation ;
-        ted:forEndpoint [
+_:td_service a wot:ThingDescription ;
+    wot:identifier "service" ;
+    wot:describes _:service ;
+    map:hasAccessMapping [
+        a map:AccessMapping ;
+        map:mapsResourcesFrom [
             a wot:Endpoint ;
             wot:href "http://localhost:5005/things"^^xsd:anyURI ;
             wot:mediaType "application/json"
         ] ;
-        ted:hasMapping [
-            a ted:Mapping ;
-            ted:key "exposesWebThing" ;
-            ted:predicate wot:exposesWebThing ;
-            ted:valuesTransformedBy _:td_stars
+        map:hasMapping [
+            a map:Mapping ;
+            map:key "exposesWebThing" ;
+            map:predicate wot:exposesWebThing ;
+            map:valuesTransformedBy _:td_stars
         ]
     ] .
 
-_:td_stars a ted:ThingDescription ;
-    ted:identifier "stars" ;
-    ted:describes [ a wot:Thing ] ;
-    ted:hasMappingRelation [
-        a ted:MappingRelation ;
-        ted:forEndpoint [
+_:td_stars a wot:ThingDescription ;
+    wot:identifier "stars" ;
+    wot:describes [ a wot:Thing ] ;
+    map:hasAccessMapping [
+        a map:AccessMapping ;
+        map:mapsResourcesFrom [
             a wot:Endpoint ;
             wot:href "$item" ;
             wot:mediaType "application/json"
         ] ;
-        ted:hasMapping _:id_map, _:creation_map, _:property_map
+        map:hasMapping _:id_map, _:creation_map, _:property_map
     ] .
 
-_:id_map a ted:Mapping ;
-    ted:key "identifier" ;
-    ted:predicate wot:identifier .
+_:id_map a map:Mapping ;
+    map:key "identifier" ;
+    map:predicate wot:identifier .
 
-_:creation_map a ted:Mapping ;
-    ted:key "creationDate" ;
-    ted:predicate wot:creationDate .
+_:creation_map a map:Mapping ;
+    map:key "creationDate" ;
+    map:predicate wot:creationDate .
 
-_:property_map a ted:Mapping ;
-    ted:key "hasWebThingProperty" ;
-    ted:predicate wot:offersInteraction ;
-    ted:valuesTransformedBy _:td_property .
+_:property_map a map:Mapping ;
+    map:key "hasWebThingProperty" ;
+    map:predicate wot:offersInteraction ;
+    map:valuesTransformedBy _:td_property .
 
-_:td_property a ted:ThingDescription ;
-    ted:identifier "property" ;
-    ted:describes [ a wot:Property ] ;
-    ted:hasMappingRelation [
-        a ted:MappingRelation ;
-        ted:forEndpoint [
+_:td_property a wot:ThingDescription ;
+    wot:identifier "property" ;
+    wot:describes [ a wot:Property ] ;
+    map:hasAccessMapping [
+        a map:AccessMapping ;
+        map:mapsResourcesFrom [
             a wot:Endpoint ;
             wot:href "$item" ;
             wot:mediaType "application/json"
         ] ;
-        ted:hasMapping _:label_map, _:ts_map, _:latest_map, _:value_map
+        map:hasMapping _:label_map, _:ts_map, _:latest_map, _:value_map
     ] .
 
-_:label_map a ted:Mapping ;
-    ted:key "label" ;
-    ted:predicate rdfs:label .
+_:label_map a map:Mapping ;
+    map:key "label" ;
+    map:predicate rdfs:label .
 
-_:ts_map a ted:Mapping ;
-    ted:key "entryTimeStamp" ;
-    ted:predicate wot:entryTimeStamp .
+_:ts_map a map:Mapping ;
+    map:key "entryTimeStamp" ;
+    map:predicate wot:entryTimeStamp .
 
-_:value_map a ted:Mapping ;
-    ted:key "value" ;
-    ted:predicate wot:value .
+_:value_map a map:Mapping ;
+    map:key "value" ;
+    map:predicate wot:value .
 
-_:latest_map a ted:Mapping ;
-    ted:key "hasLatestEntry" ;
-    ted:predicate wot:hasLatestEntry .
+_:latest_map a map:Mapping ;
+    map:key "hasLatestEntry" ;
+    map:predicate wot:hasLatestEntry .

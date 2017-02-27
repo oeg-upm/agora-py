@@ -36,7 +36,7 @@ from agora.engine.fountain import AbstractFountain
 from agora.engine.plan.agp import extend_uri
 from agora.ted import TED
 from agora.ted.evaluate import evaluate
-from agora.ted.ns import TED_NS
+from agora.ted.ns import WOT, MAP
 from agora.ted.utils import encode_rdict
 
 __author__ = 'Fernando Serena'
@@ -133,19 +133,12 @@ class Proxy(object):
                 SELECT DISTINCT ?parent WHERE {
                     ?td <%s> ?parent .
                     ?tr <%s> [ <%s> "%s" ] .
-                    {
-                      ?td <%s> [ <%s> ?tr ]
-                    }
-                    UNION
-                    {
-                      ?td <%s> ?tr
-                    }
-                }""" % (TED_NS.describes,
-                        TED_NS.valuesTransformedBy,
-                        TED_NS.identifier,
+                    ?td <%s> [ <%s> ?tr ] .
+                }""" % (WOT.describes,
+                        MAP.valuesTransformedBy,
+                        WOT.identifier,
                         resource.id,
-                        TED_NS.hasMappingRelation, TED_NS.hasMapping,
-                        TED_NS.enrichesBy
+                        MAP.hasAccessMapping, MAP.hasMapping
                         )
 
                 parents = map(lambda x: self.__rdict[self.__ndict[x.parent]], resource.graph.query(parent_search_query))
@@ -233,14 +226,14 @@ class Proxy(object):
                         ld_triples(ld, g)
                         ttl = min(ttl, extract_ttl(response.headers) or ttl)
 
-                        for enrichment in resource.enrichments:
-                            obj = enrichment.object
-                            if obj in self.__ndict:
-                                object_resource = self.__rdict[self.__ndict[obj]]
-                                rdict = {v: resource_args[v] for v in object_resource.vars if v in resource_args}
-                                obj = URIRef(
-                                    self.url_for(tid=self.__ndict[obj], b64=encode_rdict(rdict)))
-                            g.add((r_uri, enrichment.predicate, obj))
+                        # for enrichment in resource.enrichments:
+                        #     obj = enrichment.object
+                        #     if obj in self.__ndict:
+                        #         object_resource = self.__rdict[self.__ndict[obj]]
+                        #         rdict = {v: resource_args[v] for v in object_resource.vars if v in resource_args}
+                        #         obj = URIRef(
+                        #             self.url_for(tid=self.__ndict[obj], b64=encode_rdict(rdict)))
+                        #     g.add((r_uri, enrichment.predicate, obj))
 
         except Exception as e:
             print e.message
