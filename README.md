@@ -396,10 +396,100 @@ Planners follow the claim *"I do not know the answer, but I can tell you where a
 
 #### Following search plans
 Planners use RDF to represent self-contained search plans for a given graph pattern.
+```
+Graph pattern = {
+   ?s atmos:monitors ?c .
+   ?c rdfs:label ?comp .
+   ?s core:hasValue ?v . 
+   ?v core:literalValue ?lv .
+   ?v core:timeStamp ?t
+}
 
-<p align="center">
-    <img src="docs/img/plans.png" title="Example of search plan">
-</p>
+@prefix agora: <http://agora.org#> .
+@prefix atmos: <http://example.org/atmosphere#> .
+@prefix core: <http://iot.linkeddata.es/def/core#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix schema: <http://schema.org/> .
+@prefix wot: <http://iot.linkeddata.es/def/wot#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+[] a agora:SearchTree ;
+    agora:fromType atmos:ObservationContainer ;
+    agora:hasSeed <http://localhost:5000/proxy/container/eyIkbGF0IjogIjQwLjQ2NTgyNyIsIiRsbmciOiAiLTMuNjg5Njg0In0%3D> ;
+    agora:length 13 ;
+    agora:next [ agora:expectedType atmos:ObservationContainer ;
+            agora:next [ agora:byPattern _:tp_0 ;
+                    agora:expectedType atmos:Observation ;
+                    agora:next [ agora:byPattern _:tp_2 ;
+                            agora:expectedType atmos:ChemicalCompound ] ;
+                    agora:onProperty atmos:monitors ],
+                [ agora:byPattern _:tp_3 ;
+                    agora:expectedType atmos:Observation ;
+                    agora:next [ agora:byPattern _:tp_1 ;
+                            agora:expectedType core:Value ],
+                        [ agora:byPattern _:tp_4 ;
+                            agora:expectedType core:Value ] ;
+                    agora:onProperty core:hasValue ] ;
+            agora:onProperty atmos:contains ] .
+
+[] a agora:SearchSpace ;
+    agora:definedBy _:tp_0,
+        _:tp_1,
+        _:tp_2,
+        _:tp_3,
+        _:tp_4 .
+
+_:var_comp a agora:Variable ;
+    rdfs:label "?comp"^^xsd:string .
+
+_:var_lv a agora:Variable ;
+    rdfs:label "?lv"^^xsd:string .
+
+_:var_t a agora:Variable ;
+    rdfs:label "?t"^^xsd:string .
+
+_:var_c a agora:Variable ;
+    rdfs:label "?c"^^xsd:string .
+
+_:var_s a agora:Variable ;
+    rdfs:label "?s"^^xsd:string .
+
+_:tp_0 a agora:TriplePattern ;
+    rdfs:label "tp_0" ;
+    agora:object _:var_c ;
+    agora:predicate atmos:monitors ;
+    agora:subject _:var_s .
+
+_:tp_1 a agora:TriplePattern ;
+    rdfs:label "tp_1" ;
+    agora:object _:var_lv ;
+    agora:predicate core:literalValue ;
+    agora:subject _:var_v .
+
+_:tp_2 a agora:TriplePattern ;
+    rdfs:label "tp_2" ;
+    agora:object _:var_comp ;
+    agora:predicate rdfs:label ;
+    agora:subject _:var_c .
+
+_:tp_3 a agora:TriplePattern ;
+    rdfs:label "tp_3" ;
+    agora:object _:var_v ;
+    agora:predicate core:hasValue ;
+    agora:subject _:var_s .
+
+_:tp_4 a agora:TriplePattern ;
+    rdfs:label "tp_4" ;
+    agora:object _:var_t ;
+    agora:predicate core:timeStamp ;
+    agora:subject _:var_v .
+
+_:var_v a agora:Variable ;
+    rdfs:label "?v"^^xsd:string .
+```
 
 ## References
 

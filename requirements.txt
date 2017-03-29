@@ -3,7 +3,7 @@ shortuuid
 redislite
 redis
 hiredis
-rdflib
+rdflib==4.2.1
 networkx
 futures
 rfc3987
@@ -12,6 +12,3 @@ Flask-Negotiate
 requests
 python-dateutil
 nose
-pyld
-rdflib-jsonld
-jsonpath-rw
