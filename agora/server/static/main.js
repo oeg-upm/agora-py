@@ -75,8 +75,7 @@ let scope = undefined;
                 scope = $scope;
                 $scope.solutions = undefined;
                 $scope.fragment = undefined;
-                $scope.query = 'PREFIX wot: <http://www.wot.org#> \
-SELECT * WHERE {?s rdfs:label ?l ; wot:hasLatestEntry [ wot:value ?v ] }';
+                $scope.query = '';
                 console.log('hello from SPARQL!');
                 $scope.triples = [];
                 $scope.results = [];

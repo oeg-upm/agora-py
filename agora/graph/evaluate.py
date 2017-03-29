@@ -18,6 +18,9 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+from rdflib.plugins.sparql.algebra import translateQuery
+from rdflib.plugins.sparql.parser import parseQuery
+
 from agora.graph.incremental import incremental_eval_bgp
 
 """
@@ -517,7 +520,7 @@ def evalConstructQuery(ctx, query):
 class AgoraQueryContext(QueryContext):
     def __init__(self, graph=None, bindings=None, incremental=True):
         super(AgoraQueryContext, self).__init__(graph, bindings)
-        self.incremental = False
+        self.incremental = incremental
         self.filters = {}
 
     def clone(self, bindings=None):
@@ -531,8 +534,65 @@ class AgoraQueryContext(QueryContext):
         return r
 
 
-def evalQuery(graph, query, initBindings, base=None, incremental=True):
-    ctx = AgoraQueryContext(graph=graph, incremental=incremental)
+def traverse_part(part, filters):
+    if part.name == 'Filter':
+        for v, f in discriminate_filters(part.expr):
+            if v not in filters:
+                filters[v] = set([])
+            filters[v].add(f)
+    if part.name == 'BGP':
+        yield part
+    else:
+        if hasattr(part, 'p1') and part.p1 is not None:
+            for p in traverse_part(part.p1, filters):
+                yield p
+        if hasattr(part, 'p2') and part.p2 is not None:
+            for p in traverse_part(part.p2, filters):
+                yield p
+
+    if part.p is not None:
+        for p in traverse_part(part.p, filters):
+            yield p
+
+
+def extract_bgps(query, prefixes):
+    parsetree = parseQuery(query)
+    query = translateQuery(parsetree, initNs=prefixes)
+    part = query.algebra
+    filters = {}
+    bgps = []
+
+    for p in traverse_part(part, filters):
+        bgps.append(p)
+
+    for bgp in bgps:
+        yield bgp, {v: filters[v] for v in bgp._vars if v in filters}
+
+        # while part:
+        #     if part.name == 'Filter':
+        #         for v, f in discriminate_filters(part.expr):
+        #             if v not in filters:
+        #                 filters[v] = set([])
+        #             filters[v].add(f)
+        #     if part.name == 'BGP':
+        #         bgps.append(part)
+        #     else:
+        #         if hasattr(part, 'p1') and part.p1 is not None:
+        #             bgps.append(part.p1)
+        #         if hasattr(part, 'p2') and part.p2 is not None:
+        #             bgps.append(part.p2)
+        #     part = part.p
+        #
+        # print filters
+        #
+        # for bgp in bgps:
+        #     yield bgp
+
+
+def evalQuery(graph, query, initBindings, base=None, incremental=True, **kwargs):
+    ctx = AgoraQueryContext(graph=graph, incremental=incremental, **kwargs)
+
+
 
     ctx.prologue = query.prologue
 

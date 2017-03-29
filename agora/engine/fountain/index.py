@@ -124,7 +124,7 @@ def __extract_property(schema, r, p, vid):
 
 
 def __extract_types(schema, r, vid, trace=None):
-    # type: (Schema, redis.StrictRedis, str, set) -> iter, list
+    # type: (Schema, redis.StrictRedis, str, set) -> iter
     types = schema.get_types(context=vid)
 
     other_vocabs = filter(lambda x: x != vid, schema.contexts)
@@ -158,7 +158,7 @@ def __extract_types(schema, r, vid, trace=None):
 
 
 def __extract_properties(schema, r, vid, trace=None):
-    # type: (Schema, redis.StrictRedis, str, set) -> iter, list
+    # type: (Schema, redis.StrictRedis, str, set) -> iter
 
     properties = schema.get_properties(context=vid)
 

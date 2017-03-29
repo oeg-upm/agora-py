@@ -100,6 +100,13 @@ def build(fountain, server=None, import_name=__name__):
         except TypeError as e:
             raise NotFound(e.message)
 
+    @server.get('/seeds/<string:type>/digest')
+    def get_seed_type_digest(type):
+        try:
+            return {'digest': fountain.get_seed_type_digest(type)}
+        except TypeError as e:
+            raise NotFound(e.message)
+
     @server.delete('/vocabs/<string:vid>')
     def delete_vocabulary(vid):
         fountain.delete_vocabulary(vid)
@@ -220,6 +227,10 @@ class FountainClient(Client, AbstractFountain):
 
     def delete_seed(self, sid):
         raise NotImplementedError
+
+    def get_seed_type_digest(self, type):
+        response = self._get_request('seeds/{}/digest'.format(type))
+        return response
 
     def add_vocabulary(self, owl):
         response = self._post_request('vocabs', owl)

@@ -70,7 +70,9 @@ def extract_ttl(headers):
     cache_control = headers.get('Cache-Control', None)
     if cache_control is not None:
         cache_dict = parse_dict_header(cache_control)
-        ttl = int(math.ceil(float(cache_dict.get('max-age', ttl))))
+        max_age = cache_dict.get('max-age', ttl)
+        if max_age is not None:
+            ttl = int(math.ceil(float(max_age)))
     else:
         expires = headers.get('expires', None)
         if expires is not None:

@@ -20,16 +20,11 @@
 """
 
 import networkx as nx
-import sys
-from rdflib import BNode
-from rdflib import Graph
-from rdflib import RDF
 from rdflib import Variable
 from rdflib.plugins.sparql.sparql import AlreadyBound
 from rdflib.plugins.sparql.sparql import QueryContext
 
 from agora.engine.plan import AGP
-from agora.engine.plan.graph import AGORA
 
 __author__ = 'Fernando Serena'
 

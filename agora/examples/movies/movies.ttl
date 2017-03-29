@@ -1,4 +1,3 @@
-@prefix : <http://agora.org/amovies#> .
 @prefix dc: <http://purl.org/dc/terms/> .
 @prefix dbp: <http://dbpedia.org/property/> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -14,7 +13,7 @@
 <http://agora.org/amovies> rdf:type owl:Ontology .
 
 xsd:date rdf:type rdfs:Datatype .
-:hasFilm rdf:type owl:ObjectProperty .
+amovies:hasFilm rdf:type owl:ObjectProperty .
 dbpedia-owl:director rdf:type owl:ObjectProperty .
 dbpedia-owl:distributor rdf:type owl:ObjectProperty .
 dbpedia-owl:location rdf:type owl:ObjectProperty .
@@ -30,9 +29,9 @@ dbpedia-owl:releaseDate rdf:type owl:DatatypeProperty .
 dbp:birthName rdf:type owl:DatatypeProperty ;
               rdfs:range xsd:string ;
               rdfs:domain foaf:Person .
-:Service rdf:type owl:Class ;
+amovies:Service rdf:type owl:Class ;
          rdfs:subClassOf [ rdf:type owl:Restriction ;
-                           owl:onProperty :hasFilm ;
+                           owl:onProperty amovies:hasFilm ;
                            owl:someValuesFrom dbpedia-owl:Film
                          ] .
 dbpedia-owl:Company rdf:type owl:Class ;
@@ -87,3 +86,12 @@ foaf:Person rdf:type owl:Class ;
                               owl:onProperty foaf:depiction ;
                               owl:someValuesFrom foaf:Image
                             ] .
+
+amovies:rating a owl:DatatypeProperty ;
+            rdfs:domain dbpedia-owl:Film ;
+            rdfs:range xsd:float .
+
+
+amovies:votes a owl:DatatypeProperty ;
+            rdfs:domain dbpedia-owl:Film ;
+            rdfs:range xsd:long .

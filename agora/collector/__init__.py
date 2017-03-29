@@ -22,11 +22,12 @@ import logging
 import re
 from abc import abstractmethod
 
-from agora.collector.execution import PlanExecutor
-from agora.engine.plan.agp import AGP
 from rdflib import BNode
 from rdflib import Literal
 from rdflib import URIRef
+
+from agora.collector.execution import PlanExecutor
+from agora.engine.plan.agp import AGP
 
 __author__ = "Fernando Serena"
 

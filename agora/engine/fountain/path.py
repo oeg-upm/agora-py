@@ -29,6 +29,8 @@ from concurrent.futures import wait
 from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import datetime as dt
 
+from agora.engine.utils.lists import subfinder
+
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.engine.fountain.path')
@@ -165,7 +167,7 @@ def __build_paths(graph, node, root, steps=None, level=0, path_graph=None, cache
                                                                                    len(steps)))
 
     pred = set(graph.predecessors(node))
-    for t in [x for x in pred]:
+    for t in pred:
         previous_type = root if not steps else steps[-1].get('type')
         data = graph.get_edge_data(t, node)
         if data['c']:
@@ -318,14 +320,19 @@ def _find_path(index, sm, elm):
         applying_cycles = applying_cycles.union(set(seed_cycles))
 
     filtered_seed_paths = []
-    for seed_path in seed_paths:
-        for sp in [_ for _ in seed_paths if _ != seed_path and _['seeds'] == seed_path['seeds']]:
-            if __detect_redundancies(sp["steps"], seed_path["steps"]) != seed_path['steps']:
-                filtered_seed_paths.append(seed_path)
-                break
-
     applying_cycles = [{'cycle': int(cid), 'steps': eval(index.r.zrange('cycles', cid, cid).pop())} for cid in
                        applying_cycles]
+
+    for cycle in applying_cycles:
+        cycle_id = cycle['cycle']
+        cycle_steps = cycle['steps']
+        for seed_path in seed_paths:
+            path_steps = seed_path['steps']
+            path_cycles = seed_path['cycles']
+            if cycle_id in path_cycles:
+                if path_steps != cycle_steps and subfinder(path_steps, cycle_steps):
+                    filtered_seed_paths.append(seed_path)
+
     return [_ for _ in seed_paths if _ not in filtered_seed_paths], applying_cycles
 
 

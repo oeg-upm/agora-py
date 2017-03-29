@@ -33,10 +33,10 @@ def load_films_from_dbpedia():
     sparql.setReturnFormat(JSON)
 
     sparql.setQuery("""
-           SELECT distinct ?film
-           WHERE {?film a dbpedia-owl:Film} LIMIT 10 OFFSET 0
+           SELECT distinct ?film ?name
+           WHERE {?film a dbpedia-owl:Film ; foaf:name ?name} LIMIT 100 OFFSET 0
        """)
     results = sparql.query().convert()
 
     for result in results["results"]["bindings"]:
-        yield result["film"]["value"]
+        yield (result["film"]["value"], result["name"]["value"])

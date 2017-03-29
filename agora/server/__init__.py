@@ -213,4 +213,4 @@ class Client(object):
                                  data=self.__process_request_data(data, content_type),
                                  headers={'Content-Type': content_type})
         if response.status_code != 201:
-            print response.content
+            log.warning(response.content)

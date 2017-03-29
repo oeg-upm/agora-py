@@ -22,9 +22,6 @@
 import logging
 
 import rdflib
-from agora.engine.plan.agp import TP, AGP
-from agora.engine.plan.graph import AGORA
-from agora.graph.processor import extract_bgps
 from rdflib import BNode
 from rdflib import ConjunctiveGraph
 from rdflib import Graph
@@ -34,6 +31,10 @@ from rdflib import RDFS
 from rdflib import URIRef
 from rdflib import Variable
 from rdflib import plugin
+
+from agora.engine.plan.agp import TP, AGP
+from agora.engine.plan.graph import AGORA
+from agora.graph.evaluate import extract_bgps
 
 __author__ = 'Fernando Serena'
 
@@ -70,6 +71,13 @@ def extract_tps_from_plan(plan):
 
     return {str(list(plan.objects(tpn, RDFS.label)).pop()): process_tp_node(tpn) for tpn in
             plan.subjects(RDF.type, AGORA.TriplePattern)}
+
+
+def extract_seed_types_from_plan(plan):
+    # type: (Graph) -> dict
+    so = list(plan.subject_objects(predicate=AGORA.fromType))
+    st_dict = {t: set(plan.objects(subject=tree, predicate=AGORA.hasSeed)) for tree, t in so}
+    return st_dict
 
 
 class AgoraGraph(ConjunctiveGraph):
@@ -145,7 +153,9 @@ class AgoraGraph(ConjunctiveGraph):
 
     def query(self, query_object, **kwargs):
         result = super(AgoraGraph, self).query(query_object, processor='agora',
-                                               result='agora', **kwargs)
+                                               result='agora', graph=self, **kwargs)
+
+        # collector = self.__collector
         return result
 
     def search_plan(self, query_object, **kwargs):

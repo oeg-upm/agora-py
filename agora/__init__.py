@@ -64,7 +64,7 @@ class Agora(object):
 
     def query(self, query, collector=None, cache=None, loader=None, **kwargs):
         graph = self.__get_agora_graph(collector, cache, loader)
-        return graph.query(query, **kwargs)
+        return graph.query(query, collector=collector, **kwargs)
 
     def fragment(self, query=None, agps=None, collector=None, cache=None, loader=None):
         if not (query or agps):

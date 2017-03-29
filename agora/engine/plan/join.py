@@ -78,7 +78,7 @@ def subject_join(fountain, tp_paths, context, tp1, tp2, **kwargs):
     return join_paths
 
 
-def subject_object_join(fountain, tp_paths, context, tp1, tp2, hints=None):
+def subject_object_join(fountain, tp_paths, context, tp1, tp2, hints=None, cycles=None):
     # type: (Fountain, iter, Graph, tuple, tuple, dict) -> iter
     subject, pr1, o1 = tp1
     _, pr2, o2 = tp2
@@ -95,7 +95,7 @@ def subject_object_join(fountain, tp_paths, context, tp1, tp2, hints=None):
                 else:
                     matching_steps = steps[:-1]
                 for o_path in tp_paths[tp2]:
-                    if o_path.get('steps') == matching_steps:
+                    if o_path.get('steps') == matching_steps and path in join_paths:
                         join_paths.remove(path)
     elif pr2 == context.qname(RDF.type):
         tp1_range = fountain.get_property(context.qname(pr1)).get('range')

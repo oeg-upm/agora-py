@@ -18,10 +18,13 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
-from urlparse import urlparse
 
 __author__ = 'Fernando Serena'
 
 
-def lslug(url):
-    return urlparse(url, allow_fragments=True).path.split('/')[-1]
+def subfinder(mylist, pattern):
+    matches = []
+    for i in range(len(mylist)):
+        if mylist[i] == pattern[0] and mylist[i:i + len(pattern)] == pattern:
+            matches.append(pattern)
+    return matches

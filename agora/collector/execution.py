@@ -41,6 +41,7 @@ from rdflib import Variable
 from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.parser import expandUnicodeEscapes, Query
 from rdflib.plugins.sparql.sparql import QueryContext
+from shortuuid import uuid
 
 from agora.collector.http import get_resource_ttl, RDF_MIMES, http_get
 from agora.engine.plan.graph import AGORA
@@ -174,11 +175,40 @@ class TPWrapper(object):
         return '{} {} {}'.format(*strings)
 
 
+class Cycle(nx.DiGraph):
+    def __init__(self, plan, node):
+        super(Cycle, self).__init__()
+        self.__root_types = None
+        self.__root_node = node
+        self.__build_from(plan, node)
+
+    def __build_from(self, plan, node, **kwargs):
+        next_nodes = list(plan.objects(node, AGORA.next))
+        self.add_node(node, **kwargs)
+        for nxt in next_nodes:
+            links = list(plan.objects(subject=nxt, predicate=AGORA.onProperty))
+            expected_types = list(plan.objects(subject=node, predicate=AGORA.expectedType))
+            if self.__root_types is None:
+                self.__root_types = expected_types
+            link = links.pop() if links else None
+            self.add_edge(node, nxt, onProperty=link, expectedType=expected_types)
+            self.__build_from(plan, nxt, **kwargs)
+
+    @property
+    def root_types(self):
+        return frozenset(self.__root_types)
+
+    @property
+    def root_node(self):
+        return self.__root_node
+
+
 class SSWrapper(object):
     def __init__(self, plan):
         self.__plan = plan
         self.__spaces = {}
         self.__nodes = {}
+        self.__cycles = {}
         self.__pattern_space = {}
         self.__filter_trees = {}
         self.__tp_graph = nx.DiGraph()
@@ -188,6 +218,15 @@ class SSWrapper(object):
         tp_nodes = list(self.__plan.subjects(RDF.type, AGORA.TriplePattern))
         self.__patterns = {}
         filter_roots = set([])
+
+        cycle_nodes = list(self.__plan.subjects(RDF.type, AGORA.Cycle))
+        for c_node in cycle_nodes:
+            cycle = Cycle(plan, c_node)
+            for type in cycle.root_types:
+                if type not in self.__cycles:
+                    self.__cycles[type] = set([])
+                self.__cycles[type].add(cycle)
+
         for tp in tp_nodes:
             tp_wrapper = TPWrapper(plan, tp)
             self.__patterns[tp] = tp_wrapper
@@ -222,6 +261,10 @@ class SSWrapper(object):
     def patterns(self):
         return self.__patterns
 
+    @property
+    def cycles(self):
+        return self.__cycles
+
     def space_patterns(self, space):
         # type: (BNode) -> iter
         return self.__spaces[space]
@@ -244,11 +287,53 @@ class SSWrapper(object):
     def tp_graph(self):
         return self.__tp_graph
 
+    def clear_filters(self):
+        for space_list in self.__filter_trees.values():
+            for ft in space_list:
+                ft.clear()
+
 
 class PlanWrapper(object):
+    def __filter_cycle_extensions(self, cycle, (u, v, data)):
+        if set.intersection(set(cycle.root_types), data['expectedType']):
+            source_patterns = self.__graph.get_node_data(u).get('byPattern', [])
+            dest_patterns = self.__graph.get_node_data(v).get('byPattern', [])
+            return not bool(filter(lambda tp: tp.p != RDF.type, source_patterns)) and not bool(
+                filter(lambda tp: tp.p != RDF.type, dest_patterns))
+        return False
+
     def __init__(self, plan):
         self.__ss = SSWrapper(plan)
         self.__graph = PlanGraph(plan, self.__ss)
+
+        cycles = reduce(lambda x, y: y.union(x), self.__ss.cycles.values(), set([]))
+
+        cycles_dict = {c: [c_data for (_, _, c_data) in c.edges_iter(c.root_node, data=True)] for c in cycles}
+        ext_steps = {}
+        for c in cycles:
+            ext_steps[c] = filter(lambda e: self.__filter_cycle_extensions(c, e),
+                                  self.__graph.edges(data=True))
+        for c in cycles:
+            c_edges = cycles_dict[c]
+
+            for (u, v, data) in ext_steps[c]:
+                for i, c_edge in enumerate(c_edges):
+                    source = u if i == 0 else self.__clone_node(u)
+                    dest = u if i == len(c_edges) - 1 else self.__clone_node(u)
+                    existing_data = self.__graph.get_edge_data(source, dest)
+
+                    on_property = {c_edge['onProperty']}
+                    if existing_data:
+                        on_property.update(existing_data['onProperty'])
+                    self.__graph.add_edge(source, dest, expectedType=c_edge['expectedType'],
+                                          onProperty=on_property, cycle=True)
+
+    def __clone_node(self, node):
+        n = uuid()
+        n_data = self.__graph.get_node_data(node).copy()
+        n_data['spaces'] = []
+        self.__graph.add_node(n, n_data)
+        return n
 
     @property
     def graph(self):
@@ -256,17 +341,27 @@ class PlanWrapper(object):
 
     @property
     def roots(self):
-        return [(node, data) for (node, data) in self.__graph.nodes(data=True) if not self.__graph.predecessors(node)]
+        def __predecessors(x):
+            in_edges = self.__graph.in_edges(x, data=True)
+            result = bool(filter(lambda (u, v, d): not d.get('cycle', False), in_edges))
+            return result
+
+        return [(node, data) for (node, data) in self.__graph.nodes(data=True) if not __predecessors(node)]
 
     @property
     def patterns(self):
         return self.__ss.patterns.values()
+
+    def cycles_for(self, ty):
+        return self.__ss.cycles.get(ty, [])
 
     def successors(self, node):
         # type: (BNode) -> iter
 
         def filter_weight((n, n_data, edge_data)):
             weight = 2
+            if edge_data.get('cycle', False):
+                weight = 5000
             if edge_data.get('onProperty', None) is not None:
                 weight = 1
             aggr_dist = 1000
@@ -291,8 +386,17 @@ class PlanWrapper(object):
 
             return weight
 
-        suc = [(suc, self.__graph.get_node_data(suc), self.__graph.get_edge_data(node, suc)) for suc in
-               self.__graph.successors(node)]
+        suc = []
+        for (u, v, data) in self.__graph.edges_iter(node, data=True):
+            on_property = data.get('onProperty')
+            if isinstance(on_property, set):
+                for prop in on_property:
+                    prop_data = data.copy()
+                    prop_data['onProperty'] = prop
+                    suc.append((v, self.__graph.get_node_data(v), prop_data))
+            else:
+                suc.append((v, self.__graph.get_node_data(v), data))
+
         sorted_suc = sorted(suc, key=lambda x: filter_weight(x))
 
         return sorted_suc
@@ -326,6 +430,9 @@ class PlanWrapper(object):
             return True
         except nx.NetworkXNoPath:
             return False
+
+    def clear_filters(self):
+        self.__ss.clear_filters()
 
 
 def parse_rdf(graph, content, format):
@@ -362,6 +469,7 @@ class PlanExecutor(object):
         self.__last_iteration_ts = dt.now()
         self.__fragment_ttl = sys.maxint
         self.__last_ttl_ts = None
+        self.__node_seeds = set([])
 
     @property
     def ttl(self):
@@ -548,18 +656,29 @@ class PlanExecutor(object):
             predicate_pass = {}
             seed_variables = set([])
             try:
+                if (node, seed) in self.__node_seeds:
+                    return
+                self.__node_seeds.add((node, seed))
+
                 for n, n_data, e_data in self.__wrapper.successors(node):
                     expected_types = e_data.get('expectedType', None)
                     patterns = n_data.get('byPattern', [])
                     on_property = e_data.get('onProperty', None)
 
-                    for space in n_data['spaces']:
-                        next_seeds = set([])
+                    spaces = [] if 'cycle' in e_data else n_data['spaces']
+                    next_seeds = set([])
+                    for space in spaces:
+                        next_seeds.clear()
 
                         last_tp = None
                         sobs = []
 
                         for tp in sorted(patterns, key=lambda x: __tp_weight(x), reverse=True):
+                            # with self.__resource_lock:
+                            if (space, on_property, tp.p, seed) in self.__node_seeds:
+                                continue
+                            self.__node_seeds.add((space, on_property, tp.p, seed))
+
                             if __any_parent_filtered(space, parent, tp):
                                 continue
 
@@ -596,6 +715,7 @@ class PlanExecutor(object):
                                         self.__wrapper.filter(seed, space, tp.s)
 
                                     if not sobs:
+                                        self.__wrapper.filter_var(tp, tp.s)
                                         self.__wrapper.filter(seed, space, tp.s)
 
                                     filtered = False
@@ -693,9 +813,9 @@ class PlanExecutor(object):
                     except (IndexError, KeyError):
                         traceback.print_exc()
 
-                    for (tp, seed, object) in candidates:
-                        quad = (tp, seed, tp.p, object)
-                        passing = not self.__wrapper.is_filtered(seed, space, tp.s)
+                    for (tp, cand_seed, object) in candidates:
+                        quad = (tp, cand_seed, tp.p, object)
+                        passing = not self.__wrapper.is_filtered(cand_seed, space, tp.s)
                         passing = passing and not self.__wrapper.is_filtered(object, space, tp.o)
                         if not passing:
                             if tp.p not in predicate_pass:
@@ -737,6 +857,8 @@ class PlanExecutor(object):
                     # Prepare an dedicated graph for the current tree and a set of type triples (?s a Concept)
                     # to be evaluated retrospectively
                     tree_graph = __create_graph()
+                    self.__node_seeds.clear()
+                    self.__wrapper.clear_filters()
 
                     try:
                         # Get all seeds of the current tree
@@ -793,6 +915,8 @@ class PlanExecutor(object):
                         break
                 self.__last_iteration_ts = dt.now()
             thread.join()
+
+            log.info('Finished plan execution!')
 
         var_filters = {}
         if filters:

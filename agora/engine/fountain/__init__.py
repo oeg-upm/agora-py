@@ -23,6 +23,7 @@ import logging
 from abc import abstractmethod
 
 import redis
+import hashlib
 from agora.engine.fountain import onto as manager
 from agora.engine.fountain.index import Index
 from agora.engine.fountain.path import PathManager
@@ -118,6 +119,11 @@ class AbstractFountain(object):
 
     @abstractmethod
     def delete_seed(self, sid):
+        # type: (str) -> None
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_seed_type_digest(self, type):
         # type: (str) -> None
         raise NotImplementedError
 
@@ -229,3 +235,10 @@ class Fountain(AbstractFountain):
 
     def delete_type_seeds(self, type):
         return self.__sm.delete_type_seeds(type)
+
+    def get_seed_type_digest(self, type):
+        m = hashlib.md5()
+        for seed in sorted(self.__sm.get_type_seeds(type)):
+            m.update(seed)
+        return m.digest().encode('base64').strip()
+

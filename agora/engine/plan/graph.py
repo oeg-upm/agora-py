@@ -69,7 +69,23 @@ def graph_plan(plan, fountain):
         plan_graph.set((sub_node, RDF.type, AGORA.Variable))
         plan_graph.set((sub_node, RDFS.label, Literal(str(vid), datatype=XSD.string)))
 
-    def include_path(elm, p_seeds, p_steps):
+    def describe_cycle(cycle_id, g):
+        c_node = BNode('cycle{}'.format(cycle_id))
+        plan_graph.add((c_node, RDF.type, AGORA.Cycle))
+        previous_node = c_node
+        c_steps = cycles[cycle_id]
+        cycle_type = c_steps[-1].get('type')
+        plan_graph.add((c_node, AGORA.expectedType, __extend_uri(prefixes, cycle_type)))
+        for j, step in enumerate(c_steps):
+            prop = step.get('property')
+            b_node = BNode(previous_node.n3() + '/' + prop)
+            g.add((b_node, AGORA.onProperty, __extend_uri(prefixes, prop)))
+            g.add((b_node, AGORA.expectedType, __extend_uri(prefixes, step.get('type'))))
+            g.add((previous_node, AGORA.next, b_node))
+            previous_node = b_node
+        return c_node
+
+    def include_path(elm, p_seeds, p_steps, cycles):
         elm_uri = __extend_uri(prefixes, elm)
         path_g = plan_graph.get_context(elm_uri)
         b_tree = BNode(elm_uri)
@@ -80,11 +96,16 @@ def graph_plan(plan, fountain):
         for seed in p_seeds:
             path_g.add((b_tree, AGORA.hasSeed, URIRef(seed)))
 
+        for cycle_id in filter(lambda x: x not in described_cycles, cycles):
+            c_node = describe_cycle(cycle_id, path_g)
+            path_g.add((b_tree, AGORA.containsCycle, c_node))
+            described_cycles.add(cycle_id)
+
         previous_node = b_tree
         __inc_tree_length(b_tree, len(p_steps))
         for j, step in enumerate(p_steps):
             prop = step.get('property')
-            b_node = BNode(previous_node.n3() + prop)
+            b_node = BNode(previous_node.n3() + '/' + prop)
             if j < len(p_steps) - 1 or pattern[1] == RDF.type:
                 path_g.add((b_node, AGORA.onProperty, __extend_uri(prefixes, prop)))
             path_g.add((b_node, AGORA.expectedType, __extend_uri(prefixes, step.get('type'))))
@@ -94,19 +115,21 @@ def graph_plan(plan, fountain):
         p_node = __get_pattern_node(pattern)
         path_g.add((previous_node, AGORA.byPattern, p_node))
 
+    described_cycles = set([])
     for i, tp_plan in enumerate(ef_plan):
         paths = tp_plan.get('paths')
         pattern = tp_plan.get('pattern')
         hints = tp_plan.get('hints')
+        cycles = {c['cycle']: c['steps'] for c in tp_plan.get('cycles')}
         context = BNode('space_{}'.format(tp_plan.get('context')))
         for path in paths:
             steps = path.get('steps')
             seeds = path.get('seeds')
             if not len(steps) and len(seeds):
-                include_path(pattern[2], seeds, steps)
+                include_path(pattern[2], seeds, steps, cycles)
             elif len(steps):
                 ty = steps[0].get('type')
-                include_path(ty, seeds, steps)
+                include_path(ty, seeds, steps, cycles)
 
         for t in s_trees:
             plan_graph.set((t, AGORA.length, Literal(tree_lengths.get(t, 0), datatype=XSD.integer)))

@@ -19,6 +19,7 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import calendar
+import hashlib
 import logging
 import traceback
 from Queue import Empty, Full
@@ -47,7 +48,7 @@ from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
-from agora.graph import extract_tps_from_plan
+from agora.graph import extract_tps_from_plan, extract_seed_types_from_plan
 
 __author__ = 'Fernando Serena'
 
@@ -142,6 +143,7 @@ class Fragment(object):
         self.__plan_event.clear()
         self.__updated = False
         self.__tp_map = {}
+        self.__seed_types = {}
         self.__observers = set([])
         self.collecting = False
         self.__filters = filters if isinstance(filters, dict) else {}
@@ -163,10 +165,25 @@ class Fragment(object):
         return self.__filters
 
     @property
+    def seed_types(self):
+        return frozenset(self.__seed_types)
+
+    @property
+    def get_seed_digests(self):
+        return self.__seed_digests
+
+    @property
     def updated(self):
         with self.lock:
             self.__updated = False if self.kv.get('{}:updated'.format(self.key)) is None else True
             return self.__updated
+
+    @property
+    def updated_ts(self):
+        with self.lock:
+            upd_ts = self.kv.get('{}:updated'.format(self.key)) or 0
+            upd_dt = datetime.utcfromtimestamp(upd_ts)
+            return upd_dt
 
     @property
     def newcomer(self):
@@ -282,7 +299,17 @@ class Fragment(object):
             pipe.set('{}:plan'.format(self.key), p.serialize(format='turtle'))
             pipe.execute()
         self.__tp_map = extract_tps_from_plan(self.__plan)
+        self.__seed_types = extract_seed_types_from_plan(self.__plan)
+        self.__calculate_seed_digests()
         self.__plan_event.set()
+
+    def __calculate_seed_digests(self):
+        self.__seed_digests = {}
+        for type, seeds in self.__seed_types.items():
+            m = hashlib.md5()
+            for seed in sorted(seeds):
+                m.update(seed)
+            self.__seed_digests[type] = m.digest().encode('base64').strip()
 
     def __notify(self, quad):
         for observer in self.__observers:
@@ -472,6 +499,9 @@ class Scholar(Collector):
         self.__daemon.daemon = True
         self.__daemon.start()
 
+    def get(self, agp, filters=None):
+        return self.__index.get(agp, filters=filters)
+
     def _daemon(self):
         futures = {}
         while self.__enabled:
@@ -489,6 +519,13 @@ class Scholar(Collector):
                             except RuntimeError as e:
                                 traceback.print_exc()
                                 log.warn(e.message)
+                    elif fragment.updated:
+                        for t, digest in fragment.get_seed_digests.items():
+                            t_n3 = t.n3(fragment.agp.graph.namespace_manager)
+                            current_digest = self.planner.fountain.get_seed_type_digest(t_n3)
+                            if digest != current_digest:
+                                self.__index.remove(fragment.fid)
+                                break
 
             if futures:
                 log.info('Waiting for: {} collections'.format(len(futures)))
