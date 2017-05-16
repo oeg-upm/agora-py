@@ -21,14 +21,15 @@
 
 import logging
 import multiprocessing
-
-import networkx as nx
-from agora.engine.fountain.index import Index
-from agora.engine.fountain.seed import SeedManager
-from concurrent.futures import wait
-from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import datetime as dt
 
+import networkx as nx
+from concurrent.futures import wait
+from concurrent.futures.thread import ThreadPoolExecutor
+from networkx import Graph
+
+from agora.engine.fountain.index import Index
+from agora.engine.fountain.seed import SeedManager
 from agora.engine.utils.lists import subfinder
 
 __author__ = 'Fernando Serena'
@@ -151,8 +152,8 @@ def __contains_cycle(g):
     return bool(list(nx.simple_cycles(g)))
 
 
-def __build_paths(graph, node, root, steps=None, level=0, path_graph=None, cache=None):
-    # type: (nx.DiGraph, str, str, iter, int, nx.DiGraph, iter) -> iter
+def __build_paths(index, graph, node, root, node_paths, steps=None, level=0, path_graph=None, cache=None):
+    # type: (Index, nx.DiGraph, str, str, iter, iter, int, nx.DiGraph, iter) -> iter
 
     paths = []
     if steps is None:
@@ -167,6 +168,9 @@ def __build_paths(graph, node, root, steps=None, level=0, path_graph=None, cache
                                                                                    len(steps)))
 
     pred = set(graph.predecessors(node))
+    pred = filter(
+        lambda t: index.get_type(t).get('sub') or not set.intersection(set(index.get_type(t).get('super')), pred), pred)
+
     for t in pred:
         previous_type = root if not steps else steps[-1].get('type')
         data = graph.get_edge_data(t, node)
@@ -186,8 +190,10 @@ def __build_paths(graph, node, root, steps=None, level=0, path_graph=None, cache
         log.debug('[{}][{}] added a new step {} in the path to {}'.format(root, level, (t, node), node))
 
         any_subpath = False
-        next_steps = [x for x in graph.predecessors(t)]
 
+        infer_t = [t] + index.get_type(t)['sub']
+        next_steps = map(lambda x: graph.predecessors(x), infer_t)
+        next_steps = set().union(*next_steps)
         for p in next_steps:
             log.debug('[{}][{}] following {} as a pred property of {}'.format(root, level, p, t))
             extended_new_path_graph = new_path_graph.copy()
@@ -195,8 +201,21 @@ def __build_paths(graph, node, root, steps=None, level=0, path_graph=None, cache
             extended_new_path_graph.add_edges_from([(p, t)])
             if __contains_cycle(extended_new_path_graph):
                 continue
-            sub_paths = __build_paths(graph, p, root, new_steps[:], level=level + 1, path_graph=extended_new_path_graph,
-                                      cache=cache)
+
+            if p in node_paths:
+                sub_paths = []
+                print 'already calculated'
+                reuse_path_graph = new_path_graph.copy()
+                for reuse_path in node_paths[p]:
+                    for step in reuse_path:
+                        reuse_path_graph.add_edge(step['property'], step['type'])
+                    if __contains_cycle(reuse_path_graph):
+                        continue
+                    sub_paths.append(reuse_path)
+            else:
+                sub_paths = __build_paths(index, graph, p, root, node_paths, steps=new_steps[:], level=level + 1,
+                                          path_graph=extended_new_path_graph,
+                                          cache=cache)
 
             any_subpath = any_subpath or len(sub_paths)
             for sp in sub_paths:
@@ -212,16 +231,16 @@ def __build_paths(graph, node, root, steps=None, level=0, path_graph=None, cache
     return paths
 
 
-def __calculate_node_paths(graph, paths, n, d):
-    # type: (nx.DiGraph, iter, str, dict) -> None
+def __calculate_node_paths(index, graph, paths, n, d):
+    # type: (Index, nx.DiGraph, iter, str, dict) -> None
     log.debug('[START] Calculating paths to {} with data {}'.format(n, d))
     _paths = []
     if d.get('ty') == 'type':
         for p in graph.predecessors(n):
             log.debug('Following root [{}] predecessor property {}'.format(n, p))
-            _paths.extend(__build_paths(graph, p, n))
+            _paths.extend(__build_paths(index, graph, p, n, paths))
     else:
-        _paths.extend(__build_paths(graph, n, n))
+        _paths.extend(__build_paths(index, graph, n, n, paths))
     log.debug('[END] {} paths for {}'.format(len(_paths), n))
     if len(_paths):
         paths[n] = _paths
@@ -234,14 +253,21 @@ def _calculate_paths(index, graph):
     match_elm_cycles.clear()
     start_time = dt.now()
 
-    _build_directed_graph(index, graph=graph)
+    _build_directed_graph(index, graph=graph, generic=True)
     g_cycles = __find_cycles(index)
 
     node_paths = {}
-    futures = []
-    for node, data in graph.nodes(data=True):
-        futures.append(th_pool.submit(__calculate_node_paths, graph, node_paths, node, data))
-    wait(futures)
+    all_nodes = dict(graph.nodes(data=True))
+
+    in_degree_sequence = list(graph.in_degree_iter())
+    degree_sequence = sorted(map(lambda (n, d): d, in_degree_sequence))
+    degrees = sorted(set(degree_sequence), reverse=True)
+
+    for d_th in degrees:
+        nodes = filter(lambda (n, deg): deg == d_th, in_degree_sequence)
+        for node, _ in nodes:
+            data = all_nodes[node]
+            __calculate_node_paths(index, graph, node_paths, node, data)
 
     for ty in [_ for _ in index.types if _ in node_paths]:
         for sty in [_ for _ in index.get_type(ty)['sub'] if _ in node_paths]:
@@ -278,62 +304,154 @@ def __detect_redundancies(source, steps):
     return steps
 
 
-# @cached(seeds.cache)
-def _find_path(index, sm, elm):
+def _find_path(index, sm, elm, force_seed=None):
     # type: (Index, SeedManager, str) -> tuple
 
-    def build_seed_path_and_identify_cycles(_seeds):
+    def find_seeds_for(ty):
+        if force_seed:
+            for (s, types) in force_seed:
+                if ty in types:
+                    yield s
+        else:
+            for s in sm.get_type_seeds(ty):
+                yield s
+
+    def find_property_paths(elm, trace=None, type=False):
+        if trace is None:
+            trace = []
+
+        trace.append(elm)
+        paths = get_paths_from_r(elm)
+        if type:
+            super_tree = set(
+                filter(lambda t: not set.intersection(set(index.get_type(t)['super']), [elm]), [elm]))
+            elm_tree = map(lambda t: index.get_type(t)['super'], super_tree)
+            elm_tree = set().union(*elm_tree)
+        else:
+            elm_tree = index.get_property(elm)['domain']
+
+        for et in elm_tree:
+            if not type and subfinder(trace, [elm, et]):
+                break
+            et_paths = find_property_paths(et, type=True, trace=trace)
+            if not type:
+                et_step = [{'type': et, 'property': elm}]
+                for et_p in et_paths:
+                    if et_p and et_step != et_p[0]:
+                        ext_path = et_step + et_p
+                    if ext_path not in paths:
+                        paths.append(ext_path)
+            else:
+                for et_path in et_paths:
+                    if et_path not in paths:
+                        paths.append(et_path)
+
+        if type:
+            et_refs = index.get_type(elm)['refs']
+            for ref in et_refs:
+                if subfinder(trace, [ref, elm]):
+                    break
+                ref_paths = find_property_paths(ref, type=False, trace=trace)
+                for ref_path in ref_paths:
+                    if ref_path not in paths:
+                        paths.append(ref_path)
+
+        return paths
+
+    def get_paths_from_r(elm):
+        return [eval(path) for path in
+                index.r.zrange('paths:{}'.format(elm), 0, -1)]
+
+    def build_seed_path(_seeds):
         """
 
         :param _seeds:
         :return:
         """
         sub_steps = list(reversed(path[:step_index + 1]))
-        for _step in sub_steps:
-            cycle_ids.update([int(c) for c in index.r.smembers('cycles:{}'.format(_step.get('type')))])
-        sub_path = {'cycles': list(cycle_ids), 'seeds': _seeds, 'steps': sub_steps}
+        sub_path = {'cycles': [], 'seeds': _seeds, 'steps': sub_steps}
 
         if sub_path not in seed_paths:
             seed_paths.append(sub_path)
-        return cycle_ids
+
+    # def contains_cycle(elm, path, cid):
+    #     cycle_steps = applying_cycles[cid]
+    #     path_steps = path['steps']
+    #     if path_steps and (subfinder(path_steps, cycle_steps) or subfinder(path_steps, list(reversed(cycle_steps)))):
+    #         return False
+    #         # return True
+    #         # return elm != cycle_steps[-1]['property']
+    #         # return False
+    #         # return len(cycle_steps) == len(path_steps) and elm != cycle_steps[-1]['property']
+    #         # if (elm != cycle_steps[-1]['property']) or (
+    #         #             cycle_steps[-1]['property'] != path_steps[-1][
+    #         #             'property']):
+    #         #     return True
+    #     return False
+
+    def filter_paths(paths, cycles):
+
+        yielded = []
+        # back = []
+
+        for path in paths:
+            # filtered = False
+            # filtered = any([contains_cycle(elm, path, cycle_id) for cycle_id in path['cycles']])
+            # if filtered:
+            #     path['steps'] = []
+            #     if path not in back:
+            #         back.append(path)
+            # else:
+            if path not in yielded:
+                yielded.append(path)
+                yield path
+
+        # if not yielded and paths:
+        #     for b in back:
+        #         yield b
 
     seed_paths = []
-    paths = [(int(score), eval(path)) for path, score in index.r.zrange('paths:{}'.format(elm), 0, -1, withscores=True)]
 
-    applying_cycles = set([])
+    if index.is_property(elm):
+        type = False
+    elif index.is_type(elm):
+        type = True
+    else:
+        raise TypeError('{}?'.format(elm))
+
+    paths = find_property_paths(elm, type=type)
+
+    if force_seed is None:
+        force_seed = []
+
     cycle_ids = set([int(c) for c in index.r.smembers('cycles:{}'.format(elm))])
 
     step_index = 0
-    for score, path in paths:
+    for path in paths:
         for step_index, step in enumerate(path):
             ty = step.get('type')
-            type_seeds = sm.get_type_seeds(ty)
+            type_seeds = list(find_seeds_for(ty))
             if len(type_seeds):
-                seed_cycles = build_seed_path_and_identify_cycles(type_seeds)
-                applying_cycles = applying_cycles.union(set(seed_cycles))
+                build_seed_path(type_seeds)
 
     # It only returns seeds if elm is a type and there are seeds of it
+
     req_type_seeds = sm.get_type_seeds(elm)
     if len(req_type_seeds):
         path = []
-        seed_cycles = build_seed_path_and_identify_cycles(req_type_seeds)
-        applying_cycles = applying_cycles.union(set(seed_cycles))
+        build_seed_path(req_type_seeds)
 
-    filtered_seed_paths = []
-    applying_cycles = [{'cycle': int(cid), 'steps': eval(index.r.zrange('cycles', cid, cid).pop())} for cid in
-                       applying_cycles]
+    for path in seed_paths:
+        for step in path['steps']:
+            cycles = set([int(c) for c in index.r.smembers('cycles:{}'.format(step.get('type')))])
+            path['cycles'] = list(set(path['cycles']).union(cycles))
+            cycle_ids.update(cycles)
 
-    for cycle in applying_cycles:
-        cycle_id = cycle['cycle']
-        cycle_steps = cycle['steps']
-        for seed_path in seed_paths:
-            path_steps = seed_path['steps']
-            path_cycles = seed_path['cycles']
-            if cycle_id in path_cycles:
-                if path_steps != cycle_steps and subfinder(path_steps, cycle_steps):
-                    filtered_seed_paths.append(seed_path)
+    applying_cycles = set(cycle_ids)
 
-    return [_ for _ in seed_paths if _ not in filtered_seed_paths], applying_cycles
+    applying_cycles = {int(cid): eval(index.r.zrange('cycles', cid, cid).pop()) for cid in applying_cycles}
+    return list(filter_paths(seed_paths, applying_cycles)), [{'cycle': cid, 'steps': applying_cycles[cid]} for cid in
+                                                             applying_cycles]
 
 
 class PathManager(object):
@@ -346,8 +464,8 @@ class PathManager(object):
     def calculate(self):
         _calculate_paths(self.__index, self.__pgraph)
 
-    def get_paths(self, elm):
-        seed_paths, all_cycles = _find_path(self.__index, self.__sm, elm)
+    def get_paths(self, elm, force_seed=None):
+        seed_paths, all_cycles = _find_path(self.__index, self.__sm, elm, force_seed=force_seed)
         return {'paths': seed_paths, 'all-cycles': all_cycles}
 
     @property
