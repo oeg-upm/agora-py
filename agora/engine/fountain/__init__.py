@@ -205,9 +205,9 @@ class Fountain(AbstractFountain):
     def get_property(self, property):
         return self.__index.get_property(property)
 
-    def get_paths(self, elm):
+    def get_paths(self, elm, force_seed=None):
         # type: (str) -> (iter, iter)
-        return self.__pm.get_paths(elm)
+        return self.__pm.get_paths(elm, force_seed=force_seed)
 
     def add_seed(self, uri, type):
         # type: (str, str) -> str

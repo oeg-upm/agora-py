@@ -22,7 +22,7 @@
 import logging
 from abc import abstractmethod
 
-from rdflib import RDF
+from rdflib import RDF, URIRef
 
 import agora.engine.plan.join
 from agora.engine.plan.agp import AGP
@@ -69,11 +69,29 @@ def _get_tp_paths(fountain, agp):
             tp_paths[(s, pr, o)] = filter(lambda z: z not in invalid_paths, tp_paths[(s, pr, o)])
         join_paths.extend(invalid_paths)
 
-    prefixes = fountain.prefixes
     tp_paths = {}
     tp_hints = {}
     tp_cycles = {}
     source_tp_paths = {}
+
+    roots = agp.roots
+    agp = agp.graph
+
+    context_force_seeds = {}
+
+    for c in agp.contexts():
+        for (s, pr, o) in c.triples((None, None, None)):
+            if isinstance(s, URIRef) and s in roots:
+                if pr == RDF.type:
+                    types = set([o] + fountain.get_type(agp.qname(o))['sub'])
+                else:
+                    types = set(fountain.get_property(agp.qname(pr))['domain'])
+                fs = (s, types)
+                if c not in context_force_seeds:
+                    context_force_seeds[c] = []
+                context_force_seeds[c].append(fs)
+                break
+
     for c in agp.contexts():
         for (s, pr, o) in c.triples((None, None, None)):
             tp_hints[(s, pr, o)] = {}
@@ -85,15 +103,13 @@ def _get_tp_paths(fountain, agp):
 
                 tp = (s, pr, o)
 
-                comp_paths = fountain.get_paths(agp.qname(elm))
+                force_seed = context_force_seeds.get(c, [])
+                comp_paths = fountain.get_paths(agp.qname(elm), force_seed=force_seed)
                 tp_paths[tp] = comp_paths['paths']
                 source_tp_paths[tp] = comp_paths['paths']
                 tp_cycles[tp] = comp_paths['all-cycles']
             except IOError as e:
                 raise NameError('Cannot get a path to an unknown subject: {}'.format(e.message))
-
-        for tp in tp_paths:
-            tp_paths[tp] = extend_with_cycles(filter(lambda x: x != tp, tp_paths.keys()), tp_paths[tp], tp_cycles[tp], prefixes)
 
         while True:
             join_paths = []
@@ -124,13 +140,13 @@ class Plan(object):
         log.debug('Agora Graph Pattern:\n{}'.format(agp.graph.serialize(format='turtle')))
 
         try:
-            search, hints, cycles = _get_tp_paths(fountain, agp.graph)
+            search, hints, cycles = _get_tp_paths(fountain, agp)
             self.__plan = {
                 "plan": [{"context": agp.get_tp_context(tp), "pattern": tp, "paths": paths, "hints": hints[tp],
                           "cycles": cycles[tp]}
                          for (tp, paths) in search.items()], "prefixes": agp.prefixes}
 
-            self.__g_plan = graph_plan(self.__plan, self.__fountain)
+            self.__g_plan = graph_plan(self.__plan, self.__fountain, agp)
         except TypeError, e:
             raise NameError(e.message)
 
