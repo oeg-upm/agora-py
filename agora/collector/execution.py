@@ -109,8 +109,9 @@ class PlanGraph(nx.DiGraph):
         for pred in pred_nodes:
             links = list(plan.objects(subject=node, predicate=AGORA.onProperty))
             expected_types = list(plan.objects(subject=node, predicate=AGORA.expectedType))
+            cycle_start = list(plan.objects(subject=node, predicate=AGORA.isCycleStartOf))
             link = links.pop() if links else None
-            self.add_edge(pred, node, onProperty=link, expectedType=expected_types)
+            self.add_edge(pred, node, onProperty=link, expectedType=expected_types, cycleStart=cycle_start)
             self.__build_from(plan, pred, **kwargs)
 
     def add_node(self, n, attr_dict=None, **attr):
@@ -295,12 +296,7 @@ class SSWrapper(object):
 
 class PlanWrapper(object):
     def __filter_cycle_extensions(self, cycle, (u, v, data)):
-        if set.intersection(set(cycle.root_types), data['expectedType']):
-            source_patterns = self.__graph.get_node_data(u).get('byPattern', [])
-            dest_patterns = self.__graph.get_node_data(v).get('byPattern', [])
-            return not bool(filter(lambda tp: tp.p != RDF.type, source_patterns)) and not bool(
-                filter(lambda tp: tp.p != RDF.type, dest_patterns))
-        return False
+        return cycle.root_node in data['cycleStart']
 
     def __init__(self, plan):
         self.__ss = SSWrapper(plan)
@@ -362,7 +358,7 @@ class PlanWrapper(object):
             weight = 2
             if edge_data.get('cycle', False):
                 weight = 5000
-            if edge_data.get('onProperty', None) is not None:
+            elif edge_data.get('onProperty', None) is not None:
                 weight = 1
             aggr_dist = 1000
             patterns = n_data.get('byPattern', [])
@@ -435,7 +431,12 @@ class PlanWrapper(object):
         self.__ss.clear_filters()
 
 
-def parse_rdf(graph, content, format):
+def parse_rdf(graph, content, format, headers):
+    content_type = headers.get('Content-Type')
+    if content_type:
+        for f, mime in RDF_MIMES.items():
+            if mime in content_type:
+                format = f
     try:
         graph.parse(content, format=format)
     except SyntaxError:
@@ -468,12 +469,17 @@ class PlanExecutor(object):
         self.__last_success_format = None
         self.__last_iteration_ts = dt.now()
         self.__fragment_ttl = sys.maxint
+        self.__n_derefs = 0
         self.__last_ttl_ts = None
         self.__node_seeds = set([])
 
     @property
     def ttl(self):
         return self.__fragment_ttl
+
+    @property
+    def n_derefs(self):
+        return self.__n_derefs
 
     def resource_lock(self, uri):
         with self.__resource_lock:
@@ -495,7 +501,7 @@ class PlanExecutor(object):
         return graph
 
     def get_fragment_generator(self, workers=None, stop_event=None, queue_wait=None, queue_size=100, cache=None,
-                               loader=None, filters=None):
+                               loader=None, filters=None, follow_cycles=False):
 
         if workers is None:
             workers = multiprocessing.cpu_count()
@@ -528,6 +534,7 @@ class PlanExecutor(object):
                     pass
 
         def __open_graph(gid, loader, format):
+            self.__n_derefs += 1
             if cache is None:
                 result = loader(gid, format)
                 if result is None and loader != http_get:
@@ -537,7 +544,7 @@ class PlanExecutor(object):
                     content, headers = result
                     if not isinstance(content, Graph):
                         g = ConjunctiveGraph()
-                        parse_rdf(g, content, format)
+                        parse_rdf(g, content, format, headers)
                     else:
                         g = content
 
@@ -594,34 +601,23 @@ class PlanExecutor(object):
                         self.__last_success_format = fmt
                         break
 
-        def __check_expected_types(seed, tree_graph, types):
-            if not types:
-                return True
-            for _, _, t in tree_graph.triples((seed, RDF.type, None)):
-                if t in types:
-                    return True
-            return False
-
-        def __process_link_seed(seed, tree_graph, link, next_seeds, expected_types=None):
+        def __process_link_seed(seed, tree_graph, link, next_seeds):
             __check_stop()
             try:
                 __dereference_uri(tree_graph, seed)
-                if __check_expected_types(seed, tree_graph, expected_types):
-                    seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == link]
-                    next_seeds.update(seed_pattern_objects)
+                seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == link]
+                next_seeds.update(seed_pattern_objects)
             except Exception as e:
                 traceback.print_exc()
                 log.warning(e.message)
 
-        def __process_pattern_link_seed(seed, tree_graph, pattern_link, expected_types=None):
+        def __process_pattern_link_seed(seed, tree_graph, pattern_link):
             __check_stop()
             try:
                 __dereference_uri(tree_graph, seed)
             except:
                 pass
-            seed_pattern_objects = set([])
-            if __check_expected_types(seed, tree_graph, expected_types):
-                seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == pattern_link]
+            seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == pattern_link]
             return seed_pattern_objects
 
         def __check_stop():
@@ -642,10 +638,11 @@ class PlanExecutor(object):
             return weight
 
         def __any_parent_filtered(space, parent, tp):
-            for (ps, link, vars) in parent:
-                for v in vars:
-                    if self.__wrapper.is_filtered(ps, space, v) and self.__wrapper.connected(v, tp.s):
-                        return True
+            for (ps, link, cycle, vars) in parent:
+                if not cycle:
+                    for v in vars:
+                        if self.__wrapper.is_filtered(ps, space, v) and self.__wrapper.connected(v, tp.s):
+                            return True
             return False
 
         def __follow_node(node, seed, tree_graph, parent=None):
@@ -657,6 +654,7 @@ class PlanExecutor(object):
             seed_variables = set([])
             try:
                 if (node, seed) in self.__node_seeds:
+                    # print 'already visited: {} with {}'.format(node, seed)
                     return
                 self.__node_seeds.add((node, seed))
 
@@ -664,8 +662,12 @@ class PlanExecutor(object):
                     expected_types = e_data.get('expectedType', None)
                     patterns = n_data.get('byPattern', [])
                     on_property = e_data.get('onProperty', None)
+                    on_cycle = e_data.get('cycle', False)
 
-                    spaces = [] if 'cycle' in e_data else n_data['spaces']
+                    if not follow_cycles and on_cycle:
+                        continue
+
+                    spaces = [] if on_cycle else n_data['spaces']
                     next_seeds = set([])
                     for space in spaces:
                         next_seeds.clear()
@@ -674,8 +676,10 @@ class PlanExecutor(object):
                         sobs = []
 
                         for tp in sorted(patterns, key=lambda x: __tp_weight(x), reverse=True):
-                            # with self.__resource_lock:
+                            predicate_pass[tp.p] = True
+
                             if (space, on_property, tp.p, seed) in self.__node_seeds:
+                                # print 'already visited: {} {} for {}'.format(seed, on_property, tp.p)
                                 continue
                             self.__node_seeds.add((space, on_property, tp.p, seed))
 
@@ -690,7 +694,7 @@ class PlanExecutor(object):
                             if self.__wrapper.is_filtered(seed, space, tp.s):
                                 continue
 
-                            if isinstance(tp.s, URIRef) and seed != tp.s:
+                            if not on_cycle and isinstance(tp.s, URIRef) and seed != tp.s:
                                 self.__wrapper.filter(seed, space, tp.s)
                                 continue
                             else:  # tp.s is a Variable
@@ -707,14 +711,15 @@ class PlanExecutor(object):
                             if tp.p != RDF.type:
                                 try:
                                     if not last_tp or last_tp.p != tp.p:
-                                        sobs = list(__process_pattern_link_seed(seed, tree_graph, tp.p,
-                                                                                expected_types=expected_types))
+                                        sobs = list(__process_pattern_link_seed(seed, tree_graph, tp.p))
 
                                     # TODO: This may not apply when considering OPTIONAL support
                                     if not isinstance(tp.o, Variable) and not sobs:
+                                        predicate_pass[tp.p] = False
                                         self.__wrapper.filter(seed, space, tp.s)
 
-                                    if not sobs:
+                                    if not sobs and not on_cycle:
+                                        predicate_pass[tp.p] = False
                                         self.__wrapper.filter_var(tp, tp.s)
                                         self.__wrapper.filter(seed, space, tp.s)
 
@@ -725,9 +730,8 @@ class PlanExecutor(object):
 
                                         if not isinstance(tp.o, Variable):
                                             if object.n3() != tp.o.n3():
-                                                self.__wrapper.filter(seed, space, tp.s)
                                                 filtered = True
-                                                break
+                                                # break
                                         else:
                                             if tp.o in var_filters:
                                                 for var_f in var_filters[tp.o]:
@@ -739,16 +743,13 @@ class PlanExecutor(object):
                                                     if not passing:
                                                         self.__wrapper.filter(seed, space, tp.s)
                                                         filtered = True
-                                                        break
+                                                        # break
 
                                         if not filtered:
                                             candidate = (tp, seed, object)
                                             obs_candidates.add(candidate)
 
-                                    if filtered:
-                                        obs_candidates.clear()
-                                    else:
-                                        candidates.update(obs_candidates)
+                                    candidates.update(obs_candidates)
 
                                     if not next_seeds and tp.p == on_property:
                                         next_seeds = set(sobs)
@@ -756,39 +757,32 @@ class PlanExecutor(object):
                                 except AttributeError as e:
                                     log.warning('Trying to find {} objects of {}: {}'.format(tp.p, seed, e.message))
                             else:
-                                __dereference_uri(tree_graph, seed)
-                                try:
-                                    seed_objects = list(tree_graph.objects(subject=seed, predicate=on_property))
-                                    for seed_object in seed_objects:
-                                        # In some cases, it is necessary to verify the type of the seed
-                                        put_quad = True
-                                        if tp.check:
-                                            __dereference_uri(tree_graph, seed_object)
-                                            types = list(
-                                                tree_graph.objects(subject=seed_object, predicate=RDF.type))
-                                            if tp.o not in types:
-                                                put_quad = False
-
-                                        if put_quad:
-                                            candidates.add((tp, seed_object, tp.o))
-                                except AttributeError as e:
-                                    log.warning(
-                                        'Trying to find {} objects of {}: {}'.format(on_property, seed, e.message))
-
+                                put_quad = True
+                                if tp.check:
+                                    __dereference_uri(tree_graph, seed)
+                                    types = set(
+                                        tree_graph.objects(subject=seed, predicate=RDF.type))
+                                    if not set.intersection(types, expected_types):
+                                        put_quad = False
+                                if put_quad:
+                                    candidates.add((tp, seed, tp.o))
                             last_tp = tp
 
                     new_parent = parent
                     if on_property is not None:
                         if seed_variables:
-                            if all([self.__wrapper.is_filtered(seed, space, v) for v in seed_variables]):
+                            if not on_cycle and all(
+                                    [self.__wrapper.is_filtered(seed, space, v) for v in seed_variables]):
                                 continue
 
                             new_parent = parent[:]
-                            new_parent.append((seed, on_property, seed_variables))
+                            new_parent.append((seed, on_property, on_cycle, seed_variables))
 
                         if not next_seeds:
-                            __process_link_seed(seed, tree_graph, on_property, next_seeds,
-                                                expected_types=expected_types)
+                            __process_link_seed(seed, tree_graph, on_property, next_seeds)
+
+                        # if next_seeds and on_cycle:
+                        #     print 'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
 
                     try:
                         threads = []
@@ -905,11 +899,11 @@ class PlanExecutor(object):
             thread.daemon = True
             thread.start()
 
-            while not self.__completed or fragment_queue.not_empty:
+            while not self.__completed or not fragment_queue.empty():
                 try:
-                    (t, s, p, o) = fragment_queue.get(timeout=0.001)
+                    q = fragment_queue.get(timeout=0.01)
                     fragment_queue.task_done()
-                    yield (t, s, p, o)
+                    yield q
                 except Queue.Empty:
                     if self.__completed:
                         break
