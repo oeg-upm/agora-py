@@ -96,13 +96,13 @@ class Agora(object):
             comp_plan.__iadd__(g['plan'])
             prefixes.update(g['prefixes'])
 
-        return {'prefixes': prefixes, 'plan': comp_plan, 'generator': comp_gen(generators)}
+        return {'prefixes': prefixes, 'plan': comp_plan, 'generator': comp_gen(generators), 'gens': generators}
 
     def search_plan(self, query):
         collector = Collector(self._planner)
         graph = AgoraGraph(collector)
         comp_plan = Graph(namespace_manager=graph.namespace_manager)
-        for agp in graph.agps(query):
+        for agp, filters in graph.agps(query):
             comp_plan.__iadd__(self._planner.make_plan(agp))
         return comp_plan
 
