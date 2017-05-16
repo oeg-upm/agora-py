@@ -24,8 +24,6 @@ from rdflib import BNode, Graph
 from rdflib import Literal
 from rdflib import RDF
 
-from agora import Fountain
-
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.engine.plan.join')
