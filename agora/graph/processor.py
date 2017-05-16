@@ -94,7 +94,7 @@ class FragmentProcessor(SPARQLProcessor):
             for bgp in bgps:
                 filters = {v: filters[v] for v in bgp._vars if v in filters}
                 f = collector.get(graph.build_agp(bgp.triples), filters)
-                if f is None:
+                if f is None or not f['fragment'].updated:
                     incremental = True
                     break
             kwargs['incremental'] = incremental
