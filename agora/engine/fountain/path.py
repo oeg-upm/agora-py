@@ -204,7 +204,7 @@ def __build_paths(index, graph, node, root, node_paths, steps=None, level=0, pat
 
             if p in node_paths:
                 sub_paths = []
-                print 'already calculated'
+                # print 'already calculated'
                 reuse_path_graph = new_path_graph.copy()
                 for reuse_path in node_paths[p]:
                     for step in reuse_path:
