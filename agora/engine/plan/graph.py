@@ -18,6 +18,7 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+import hashlib
 import logging
 
 from rdflib import ConjunctiveGraph, URIRef, BNode, RDF, Literal
@@ -38,7 +39,11 @@ def __extend_uri(prefixes, short):
         return short
 
 
-def graph_plan(plan, fountain):
+def type_subtree(fountain, t):
+    return set([t] + fountain.get_type(t).get('sub'))
+
+
+def graph_plan(plan, fountain, agp):
     plan_graph = ConjunctiveGraph()
     plan_graph.bind('agora', AGORA)
     prefixes = plan.get('prefixes')
@@ -46,9 +51,12 @@ def graph_plan(plan, fountain):
     tree_lengths = {}
     s_trees = set([])
     patterns = {}
+    described_cycles = {}
 
     for (prefix, u) in prefixes.items():
         plan_graph.bind(prefix, u)
+
+    tree_graph = plan_graph.get_context('trees')
 
     def __get_pattern_node(p):
         if p not in patterns:
@@ -69,70 +77,86 @@ def graph_plan(plan, fountain):
         plan_graph.set((sub_node, RDF.type, AGORA.Variable))
         plan_graph.set((sub_node, RDFS.label, Literal(str(vid), datatype=XSD.string)))
 
-    def describe_cycle(cycle_id, g):
+    def describe_cycle(cycle_id, cg):
         c_node = BNode('cycle{}'.format(cycle_id))
-        plan_graph.add((c_node, RDF.type, AGORA.Cycle))
+        cg = cg.get_context(c_node)
+        cg.add((c_node, RDF.type, AGORA.Cycle))
         previous_node = c_node
         c_steps = cycles[cycle_id]
         cycle_type = c_steps[-1].get('type')
-        plan_graph.add((c_node, AGORA.expectedType, __extend_uri(prefixes, cycle_type)))
+        for et in type_subtree(fountain, cycle_type):
+            cg.add((c_node, AGORA.expectedType, __extend_uri(prefixes, et)))
         for j, step in enumerate(c_steps):
             prop = step.get('property')
-            b_node = BNode(previous_node.n3() + '/' + prop)
-            g.add((b_node, AGORA.onProperty, __extend_uri(prefixes, prop)))
-            g.add((b_node, AGORA.expectedType, __extend_uri(prefixes, step.get('type'))))
-            g.add((previous_node, AGORA.next, b_node))
+            b_node = BNode(previous_node.n3() + '/#end')
+            cg.add((b_node, AGORA.onProperty, __extend_uri(prefixes, prop)))
+            c_expected_type = step.get('type')
+            cg.add((b_node, AGORA.expectedType, __extend_uri(prefixes, c_expected_type)))
+            cg.add((previous_node, AGORA.next, b_node))
             previous_node = b_node
         return c_node
 
     def include_path(elm, p_seeds, p_steps, cycles):
+        m = hashlib.md5()
+        for s in p_seeds:
+            m.update(s)
         elm_uri = __extend_uri(prefixes, elm)
-        path_g = plan_graph.get_context(elm_uri)
-        b_tree = BNode(elm_uri)
+        b_tree = BNode(m.digest().encode('base64').strip())
         s_trees.add(b_tree)
-        path_g.set((b_tree, RDF.type, AGORA.SearchTree))
-        path_g.set((b_tree, AGORA.fromType, elm_uri))
+        tree_graph.set((b_tree, RDF.type, AGORA.SearchTree))
+        tree_graph.add((b_tree, AGORA.fromType, elm_uri))
 
         for seed in p_seeds:
-            path_g.add((b_tree, AGORA.hasSeed, URIRef(seed)))
+            tree_graph.add((b_tree, AGORA.hasSeed, URIRef(seed)))
 
-        for cycle_id in filter(lambda x: x not in described_cycles, cycles):
-            c_node = describe_cycle(cycle_id, path_g)
-            path_g.add((b_tree, AGORA.containsCycle, c_node))
-            described_cycles.add(cycle_id)
+        for cycle_id in filter(lambda x: x not in described_cycles.keys(), cycles):
+            c_node = describe_cycle(cycle_id, plan_graph)
+            described_cycles[cycle_id] = c_node
+            plan_graph.get_context(c_node).add((b_tree, AGORA.goesThroughCycle, c_node))
 
         previous_node = b_tree
         __inc_tree_length(b_tree, len(p_steps))
+
         for j, step in enumerate(p_steps):
             prop = step.get('property')
-            b_node = BNode(previous_node.n3() + '/' + prop)
             if j < len(p_steps) - 1 or pattern[1] == RDF.type:
-                path_g.add((b_node, AGORA.onProperty, __extend_uri(prefixes, prop)))
-            path_g.add((b_node, AGORA.expectedType, __extend_uri(prefixes, step.get('type'))))
-            path_g.add((previous_node, AGORA.next, b_node))
+                b_node = BNode(previous_node.n3() + '/' + prop)
+                tree_graph.add((b_node, AGORA.onProperty, __extend_uri(prefixes, prop)))
+            else:
+                b_node = BNode(previous_node.n3() + '/' + prop)
+            tree_graph.add((b_node, AGORA.expectedType, __extend_uri(prefixes, step.get('type'))))
+            tree_graph.add((previous_node, AGORA.next, b_node))
             previous_node = b_node
 
         p_node = __get_pattern_node(pattern)
-        path_g.add((previous_node, AGORA.byPattern, p_node))
+        if pattern[1] == RDF.type:
+            b_node = BNode(previous_node.n3() + '/' + tree_graph.qname(pattern[2]))
+            tree_graph.add((b_node, AGORA.expectedType, pattern[2]))
+            tree_graph.add((previous_node, AGORA.next, b_node))
+            tree_graph.add((b_node, AGORA.byPattern, p_node))
+        else:
+            tree_graph.add((previous_node, AGORA.byPattern, p_node))
 
-    described_cycles = set([])
     for i, tp_plan in enumerate(ef_plan):
         paths = tp_plan.get('paths')
         pattern = tp_plan.get('pattern')
         hints = tp_plan.get('hints')
         cycles = {c['cycle']: c['steps'] for c in tp_plan.get('cycles')}
         context = BNode('space_{}'.format(tp_plan.get('context')))
+
         for path in paths:
             steps = path.get('steps')
             seeds = path.get('seeds')
+            ty = None
             if not len(steps) and len(seeds):
-                include_path(pattern[2], seeds, steps, cycles)
+                ty = pattern[2]
             elif len(steps):
                 ty = steps[0].get('type')
+            if ty:
                 include_path(ty, seeds, steps, cycles)
 
         for t in s_trees:
-            plan_graph.set((t, AGORA.length, Literal(tree_lengths.get(t, 0), datatype=XSD.integer)))
+            tree_graph.set((t, AGORA.length, Literal(tree_lengths.get(t, 0), datatype=XSD.integer)))
 
         pattern_node = __get_pattern_node(pattern)
         plan_graph.add((context, AGORA.definedBy, pattern_node))
@@ -161,16 +185,78 @@ def graph_plan(plan, fountain):
             if 'check' in hints:
                 plan_graph.add((pattern_node, AGORA.checkType, Literal(hints['check'], datatype=XSD.boolean)))
 
-        sub_expected = plan_graph.subjects(predicate=AGORA.expectedType)
-        for s in sub_expected:
-            expected_types = list(plan_graph.objects(s, AGORA.expectedType))
+    c_roots = {}
+    for c_id, c_node in described_cycles.items():
+        c_root_types = set({})
+        for crt in plan_graph.objects(c_node, AGORA.expectedType):
+            crt_qname = plan_graph.qname(crt)
+            c_root_types.update(type_subtree(fountain, crt_qname))
+        c_roots[c_id] = c_root_types
+
+    expected_res = tree_graph.query("""SELECT DISTINCT ?n WHERE {
+                                      ?n agora:expectedType ?type
+                                   }""")
+    node_types = {}
+    roots = [str(r) for r in agp.roots]
+    for res in expected_res:
+        to_be_extended = True
+        type_expansion = False
+        near_patterns = set(tree_graph.objects(res.n, AGORA.byPattern))
+        for prev in tree_graph.subjects(AGORA.next, res.n):
+            for sib_node in tree_graph.objects(prev, AGORA.next):
+                if sib_node != res.n:
+                    near_patterns.update(set(tree_graph.objects(sib_node, AGORA.byPattern)))
+        for p_node in near_patterns:
+            p_pred = list(plan_graph.objects(p_node, AGORA.predicate)).pop()
+            if p_pred == RDF.type:
+                type_expansion = True
+            p_subject = list(plan_graph.objects(p_node, AGORA.subject)).pop()
+            if not isinstance(p_subject, URIRef):
+                subject_str = list(plan_graph.objects(p_subject, RDFS.label)).pop().toPython()
+            else:
+                subject_str = str(p_subject)
+            if subject_str not in roots:
+                to_be_extended = False
+                break
+
+        if to_be_extended:
+            node_types[res.n] = set([tree_graph.qname(t) for t in tree_graph.objects(res.n, AGORA.expectedType)])
+
+        if type_expansion:
+            expected_types = list(tree_graph.objects(res.n, AGORA.expectedType))
             for et in expected_types:
-                plan_graph.remove((s, AGORA.expectedType, et))
-            q_expected_types = [plan_graph.qname(t) for t in expected_types]
-            expected_types = [d for d in expected_types if
-                              not set.intersection(set(fountain.get_type(plan_graph.qname(d)).get('super')),
-                                                   set(q_expected_types))]
-            for et in expected_types:
-                plan_graph.add((s, AGORA.expectedType, et))
+                tree_graph.remove((res.n, AGORA.expectedType, et))
+                q_expected_types = type_subtree(fountain, tree_graph.qname(et))
+                for et_q in q_expected_types:
+                    tree_graph.add((res.n, AGORA.expectedType, __extend_uri(prefixes, et_q)))
+
+    for c_id, root_types in c_roots.items():
+        found_extension = False
+        for n, expected in node_types.items():
+            if set.intersection(expected, set(root_types)):
+                tree_graph.add((n, AGORA.isCycleStartOf, described_cycles[c_id]))
+                found_extension = True
+
+        if not found_extension:
+            plan_graph.remove_context(plan_graph.get_context(described_cycles[c_id]))
+
+    for t in s_trees:
+        tree_graph.set((t, AGORA.length, Literal(tree_lengths.get(t, 0), datatype=XSD.integer)))
+        from_types = set([plan_graph.qname(x) for x in plan_graph.objects(t, AGORA.fromType)])
+        def_from_types = filter(lambda x: not set.intersection(set(fountain.get_type(x)['super']), from_types),
+                                from_types)
+        for dft in def_from_types:
+            tree_graph.set((t, AGORA.fromType, __extend_uri(prefixes, dft)))
+
+    for res in plan_graph.query("""SELECT ?tree ?sub ?nxt WHERE {
+                           ?tree a agora:SearchTree ;                              
+                                 agora:next ?nxt .
+                           ?nxt agora:byPattern [
+                                   agora:subject ?sub 
+                                ]                    
+                        }"""):
+        if isinstance(res.sub, URIRef):
+            plan_graph.set((res.tree, AGORA.hasSeed, res.sub))
+            plan_graph.remove((res.nxt, AGORA.isCycleStartOf, None))
 
     return plan_graph
