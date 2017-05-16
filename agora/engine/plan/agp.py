@@ -127,6 +127,11 @@ class AGP(set):
 
         return g
 
+    @property
+    def roots(self):
+        w = self.wire
+        return map(lambda x: x[0], filter(lambda x: x[1] == 0, list(w.in_degree_iter())))
+
     def __nodify(self, elm, variables):
         if isinstance(elm, Variable):
             if elm not in variables:
