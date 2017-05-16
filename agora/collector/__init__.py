@@ -71,11 +71,15 @@ class Collector(AbstractCollector):
         plan = self.__planner.make_plan(agp)
         executor = PlanExecutor(plan)
 
-        def with_context():
+        def with_context_ttl():
             return executor.ttl
 
+        def with_context_derefs():
+            return executor.n_derefs
+
         fragment_dict = executor.get_fragment_generator(cache=self.cache, loader=self.__loader, **kwargs)
-        fragment_dict['ttl'] = with_context
+        fragment_dict['ttl'] = with_context_ttl
+        fragment_dict['n_derefs'] = with_context_derefs
         return fragment_dict
 
     @property
