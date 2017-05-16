@@ -49,7 +49,7 @@ tpool = ThreadPoolExecutor(max_workers=1)
 
 
 class RedisCache(object):
-    def __init__(self, persist_mode=False, key_prefix='', min_cache_time=5,
+    def __init__(self, persist_mode=False, key_prefix='', min_cache_time=5, force_cache_time=False,
                  base='store', path='cache', redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None):
         self.__key_prefix = key_prefix
         self.__cache_key = '{}:cache'.format(key_prefix)
@@ -59,6 +59,7 @@ class RedisCache(object):
         self.__uris = {}
         self.__persist_mode = persist_mode
         self.__min_cache_time = min_cache_time
+        self.__force_cache_time = force_cache_time
         self.__base_path = base
         self.__resource_path = path
         self.__resource_cache = get_triple_store(persist_mode=persist_mode,
@@ -191,7 +192,7 @@ class RedisCache(object):
                 self.__resource_cache.remove_context(g)
                 g = self.__resource_cache.get_context(gid)
 
-                log.debug('Caching {}'.format(gid))
+                # log.debug('Caching {}'.format(gid))
                 response = loader(gid, format)
                 if response is None and loader != http_get:
                     response = http_get(gid, format)
@@ -202,12 +203,13 @@ class RedisCache(object):
                 ttl = self.__min_cache_time
                 source, headers = response
                 if not isinstance(source, Graph):
-                    parse_rdf(g, source, format)
+                    parse_rdf(g, source, format, headers)
                 else:
                     if g != source:
                         g.__iadd__(source)
 
-                ttl = extract_ttl(headers) or ttl
+                if not self.__force_cache_time:
+                    ttl = extract_ttl(headers) or ttl
 
                 # Let's create a new one
                 p.set('{}:{}:uri'.format(self.__key_prefix, uuid), gid)
@@ -225,7 +227,7 @@ class RedisCache(object):
     def release(self, g):
         if isinstance(g, ConjunctiveGraph):
             if self.__persist_mode:
-                g.close()
+                # g.close()
                 tpool.submit(self.__clean, g.identifier.toPython())
             else:
                 g.remove((None, None, None))
