@@ -191,7 +191,7 @@ class Fragment(object):
             return self.kv.get('{}:stored'.format(self.key)) is None
 
     def updated_for(self, ttl):
-        ttl = int(min(100000, ttl))  # sys.maxint don't work for expire values!
+        ttl = int(min(10000000, ttl))  # sys.maxint don't work for expire values!
         ttl = int(max(ttl, 1))
         self.__updated = ttl > 0
         updated_key = '{}:updated'.format(self.key)
@@ -199,7 +199,7 @@ class Fragment(object):
             if self.__updated:
                 pipe.set(updated_key, ttl)
                 pipe.set('{}:stored'.format(self.key), True)
-                pipe.expire(updated_key, int(min(100000, ttl)))
+                pipe.expire(updated_key, int(min(10000000, ttl)))
             else:
                 pipe.delete(updated_key)
             pipe.execute()
@@ -380,8 +380,8 @@ class FragmentIndex(object):
         self.__orphaned = {}
         self.__key_prefix = key_prefix
         self.__fragments_key = '{}:fragments'.format(key_prefix)
-        self.kv = kv if kv is not None else get_kv()
         self.triples = triples if triples is not None else get_triple_store()
+        self.kv = kv if kv is not None else get_kv(persist_mode=True, redis_file='fragments.db')
         self.__planner = planner
         self.lock = Lock()
         # Load fragments from kv
@@ -478,19 +478,20 @@ class FragmentIndex(object):
 
 
 class Scholar(Collector):
-    def __init__(self, planner, cache=None, loader=None):
+    def __init__(self, planner, cache=None, loader=None, kv=None):
         # type: (AbstractPlanner, RedisCache, object) -> None
         super(Scholar, self).__init__(planner, cache)
         # Scholars require cache
         self.loader = loader
-        kv = None
         persist_mode = False
         triples = None
         if cache is not None:
-            kv = cache.r
+            # kv = cache.r
             persist_mode = cache.persist_mode
         if persist_mode:
             triples = get_triple_store(persist_mode=persist_mode, base=cache.base_path, path='fragments')
+        if kv is None:
+            kv = get_kv(persist_mode=persist_mode, redis_file=cache.base_path + '/fragments/fragments.db')
         self.__index = FragmentIndex(planner, key_prefix='scholar', kv=kv, triples=triples)
         self.__daemon_event = Event()
         self.__daemon_event.clear()
