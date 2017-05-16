@@ -46,7 +46,7 @@ def get_resource_ttl(headers):
 
 
 def http_get(uri, format):
-    # log.debug('HTTP GET {}'.format(uri))
+    log.debug('HTTP GET {}'.format(uri))
     try:
         response = requests.get(uri, headers={'Accept': RDF_MIMES[format]}, timeout=30)
     except requests.Timeout:
