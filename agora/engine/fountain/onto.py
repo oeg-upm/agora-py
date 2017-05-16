@@ -23,11 +23,11 @@ import StringIO
 import logging
 import urlparse
 
-from rdflib import Graph, RDF
+from rdflib import Graph, RDF, URIRef
 from rdflib.namespace import OWL
 from rdflib.plugins.parsers.notation3 import BadSyntax
-from agora.engine.fountain.schema import Schema
 
+from agora.engine.fountain.schema import Schema
 
 __author__ = 'Fernando Serena'
 
@@ -56,18 +56,25 @@ def __load_owl(owl):
     :param owl: The ontology to be loaded to the fountain
     :return:
     """
-    owl_g = Graph()
+    raw_g = Graph()
     for f in ['turtle', 'xml']:
         try:
-            owl_g.parse(source=StringIO.StringIO(owl), format=f)
+            raw_g.parse(source=StringIO.StringIO(owl), format=f)
             log.debug('Parsed ontology in {} format'.format(f))
             break
         except SyntaxError, e:
             log.warn(e.message)
             pass
 
-    if not len(owl_g):
+    if not len(raw_g):
         raise VocabularyError()
+
+    owl_g = Graph()
+    for s, p, o in raw_g.triples((None, None, None)):
+        if (isinstance(s, URIRef) and s.startswith('file')) or p.startswith('file') or (
+                    isinstance(o, URIRef) and o.startswith('file')):
+            continue
+        owl_g.add((s, p, o))
 
     found_ontos = list(owl_g.subjects(RDF.type, OWL.Ontology))
     if len(found_ontos) != 1:
@@ -75,6 +82,8 @@ def __load_owl(owl):
 
     uri = found_ontos.pop()
 
+    for p, u in raw_g.namespaces():
+        owl_g.bind(p, u)
     vid = [p for (p, u) in owl_g.namespaces() if uri in u and p != '']
     imports = owl_g.objects(uri, OWL.imports)
     if not len(vid):
@@ -161,4 +170,3 @@ def get_vocabulary(schema, vid):
     :return:
     """
     return schema.get_context(vid).serialize(format='turtle')
-
