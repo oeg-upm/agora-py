@@ -18,18 +18,15 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+import hashlib
 import logging
-
 from abc import abstractmethod
 
-import redis
-import hashlib
 from agora.engine.fountain import onto as manager
 from agora.engine.fountain.index import Index
 from agora.engine.fountain.path import PathManager
 from agora.engine.fountain.schema import Schema
 from agora.engine.fountain.seed import SeedManager
-from agora.engine.utils.kv import get_kv
 
 __author__ = 'Fernando Serena'
 
@@ -134,29 +131,55 @@ class AbstractFountain(object):
 
 
 class Fountain(AbstractFountain):
-    def __init__(self, persist_mode=False, base='store', path='fountain', redis_host='localhost', redis_port=6379,
-                 redis_db=1, redis_file=None):
-        self.__schema = Schema(persist_mode, base=base, path=path)
-        self.__index = Index(persist_mode, redis_host, redis_port, redis_db, redis_file)
-        self.__index.schema = self.__schema
-        self.__sm = SeedManager(self.__index)
-        self.__pm = PathManager(self.__index, self.__sm)
+    def __init__(self):
+        self.__index = None
+        self.__schema = None
+        self.__pm = None
+        self.__sm = None
 
     @property
     def index(self):
+        # type: () -> Index
         return self.__index
+
+    @index.setter
+    def index(self, i):
+        # type: (Index) -> None
+        self.__index = i
+        if self.__schema:
+            self.__index.schema = self.__schema
 
     @property
     def seed_manager(self):
+        # type: () -> SeedManager
         return self.__sm
+
+    @seed_manager.setter
+    def seed_manager(self, s):
+        # type: (SeedManager) -> None
+        self.__sm = s
 
     @property
     def schema(self):
+        # type: () -> Schema
         return self.__schema
+
+    @schema.setter
+    def schema(self, s):
+        # type: (Schema) -> None
+        self.__schema = s
+        if self.__index:
+            self.__index.schema = self.__schema
 
     @property
     def path_manager(self):
+        # type: () -> PathManager
         return self.__pm
+
+    @path_manager.setter
+    def path_manager(self, p):
+        # type: (PathManager) -> None
+        self.__pm = p
 
     def add_vocabulary(self, owl):
         # type: (str) -> iter
@@ -206,7 +229,7 @@ class Fountain(AbstractFountain):
         return self.__index.get_property(property)
 
     def get_paths(self, elm, force_seed=None):
-        # type: (str) -> (iter, iter)
+        # type: (str, iter) -> (iter, iter)
         return self.__pm.get_paths(elm, force_seed=force_seed)
 
     def add_seed(self, uri, type):
@@ -241,4 +264,3 @@ class Fountain(AbstractFountain):
         for seed in sorted(self.__sm.get_type_seeds(type)):
             m.update(seed)
         return m.digest().encode('base64').strip()
-
