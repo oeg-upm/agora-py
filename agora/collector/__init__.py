@@ -22,12 +22,16 @@ import logging
 import re
 from abc import abstractmethod
 
+from agora.collector.cache import RedisCache
+
+from agora.engine.plan.graph import AGORA
 from rdflib import BNode
 from rdflib import Literal
 from rdflib import URIRef
 
 from agora.collector.execution import PlanExecutor
 from agora.engine.plan.agp import AGP
+from shortuuid import uuid
 
 __author__ = "Fernando Serena"
 
@@ -47,11 +51,12 @@ class AbstractCollector(object):
 
 
 class Collector(AbstractCollector):
-    def __init__(self, planner, cache=None):
-        # type: (AbstractPlanner, Cache) -> Collector
-        self.cache = cache
-        self.__planner = planner
+    def __init__(self):
+        # type: () -> Collector
+        self.__cache = None
+        self.__planner = None
         self.__loader = None
+        self.__force_seed = None
 
     @property
     def loader(self):
@@ -62,13 +67,45 @@ class Collector(AbstractCollector):
         self.__loader = l
 
     @property
+    def force_seed(self):
+        return self.__force_seed
+
+    @force_seed.setter
+    def force_seed(self, s):
+        self.__force_seed = s
+
+    @property
     def planner(self):
         return self.__planner
+
+    @planner.setter
+    def planner(self, p):
+        self.__planner = p
+
+    @property
+    def cache(self):
+        return self.__cache
+
+    @cache.setter
+    def cache(self, c):
+        self.__cache = c
 
     def get_fragment_generator(self, agp, **kwargs):
         # type: (AGP) -> dict
 
-        plan = self.__planner.make_plan(agp)
+        force_seed_tuples = []
+        if self.__force_seed:
+            for ty in self.__force_seed.keys():
+                force_seed_tuples.append((URIRef('http://{}'.format(uuid())), ty))
+        plan = self.__planner.make_plan(agp, force_seed=force_seed_tuples)
+
+        for s, ty in force_seed_tuples:
+            trees = list(plan.subjects(predicate=AGORA.hasSeed, object=s))
+            for t in trees:
+                plan.remove((t, AGORA.hasSeed, s))
+                for actual_s in self.__force_seed[ty]:
+                    plan.add((t, AGORA.hasSeed, actual_s))
+
         executor = PlanExecutor(plan)
 
         def with_context_ttl():
@@ -84,7 +121,7 @@ class Collector(AbstractCollector):
 
     @property
     def prefixes(self):
-        return self.__planner.fountain.prefixes
+        return self.planner.fountain.prefixes
 
 
 def triplify(x):
