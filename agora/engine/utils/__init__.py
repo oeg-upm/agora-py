@@ -18,5 +18,27 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+import os
+from threading import Event, Lock
 
 __author__ = 'Fernando Serena'
+
+stopped = Event()
+
+
+class Singleton(type):
+    _lock = Lock()
+
+    def __call__(cls, *args, **kwargs):
+        with cls._lock:
+            id = kwargs.get('id', '')
+            if id not in cls.instances:
+                cls.instances[id] = super(Singleton, cls).__call__(*args, **kwargs)
+            return cls.instances[id]
+
+
+def prepare_store_path(base, path):
+    if not os.path.exists(base):
+        os.makedirs(base)
+    if not os.path.exists('{}/{}'.format(base, path)):
+        os.makedirs('{}/{}'.format(base, path))
