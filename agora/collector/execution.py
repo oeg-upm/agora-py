@@ -27,12 +27,11 @@ import sys
 import traceback
 from _bsddb import DBNotFoundError
 from datetime import datetime as dt, datetime
-from threading import RLock, Thread, Event, Lock
+from threading import RLock, Thread, Lock
 from xml.sax import SAXParseException
 
 import networkx as nx
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import wait
+from concurrent.futures import ThreadPoolExecutor, wait
 from rdflib import BNode
 from rdflib import ConjunctiveGraph, RDF, URIRef
 from rdflib import Graph
@@ -45,6 +44,7 @@ from shortuuid import uuid
 
 from agora.collector.http import get_resource_ttl, RDF_MIMES, http_get
 from agora.engine.plan.graph import AGORA
+from agora.engine.utils import stopped
 
 pool = ThreadPoolExecutor(max_workers=multiprocessing.cpu_count())
 
@@ -72,14 +72,11 @@ class FilterTree(set):
 
     def filter(self, resource, space, variable):
         with self.__lock:
-            # if variable in self.variables:
             self.add((resource, space, variable))
 
     def is_filtered(self, resource, space, variable):
         with self.__lock:
-            # if variable in self.variables:
             return (resource, space, variable) in self
-            # return False
 
 
 class PlanGraph(nx.DiGraph):
@@ -95,11 +92,13 @@ class PlanGraph(nx.DiGraph):
         for node in node_patterns:
             spaces = set([])
             patterns = set([])
+            check_l = list(plan.objects((node, AGORA.checkType)))
+            check = check_l.pop().toPython() if check_l else False
             for tp in node_patterns[node]:
                 tp_wrapper = ss.patterns[tp]
                 spaces.add(tp_wrapper.defined_by)
                 patterns.add(tp_wrapper)
-            self.add_node(node, spaces=spaces, byPattern=patterns)
+            self.add_node(node, spaces=spaces, byPattern=patterns, check=check)
             self.__build_from(plan, node, spaces=spaces)
 
     def __build_from(self, plan, node, **kwargs):
@@ -147,11 +146,6 @@ class TPWrapper(object):
         else:  # It is a variable
             subject = Variable(list(plan.objects(self.subject_node, RDFS.label)).pop().toPython())
 
-        try:
-            self.__check = list(plan.objects(node, predicate=AGORA.checkType)).pop().toPython()
-        except IndexError:
-            self.__check = True
-
         self.s = subject
         self.p = predicate
         self.o = object
@@ -163,10 +157,6 @@ class TPWrapper(object):
     @property
     def node(self):
         return self.__node
-
-    @property
-    def check(self):
-        return self.__check
 
     def __repr__(self):
         def elm_to_string(elm):
@@ -246,13 +236,17 @@ class SSWrapper(object):
             self.__build_filter_tree(filter_tree, root_tp)
             filter_tree.add_variable(root_tp.o)
 
-    def __build_filter_tree(self, fp, tp):
+    def __build_filter_tree(self, fp, tp, trace=None):
         if isinstance(tp.s, Variable):
+            if trace is None:
+                trace = []
             fp.add_tp(tp)
             next_tps = list(self.__plan.subjects(AGORA.object, tp.subject_node))
             for tp_node in next_tps:
                 tp = self.patterns[tp_node]
-                self.__build_filter_tree(fp, tp)
+                if tp not in trace:
+                    trace.append(tp)
+                    self.__build_filter_tree(fp, tp, trace)
 
     @property
     def spaces(self):
@@ -295,7 +289,8 @@ class SSWrapper(object):
 
 
 class PlanWrapper(object):
-    def __filter_cycle_extensions(self, cycle, (u, v, data)):
+    @staticmethod
+    def __filter_cycle_extensions(cycle, (u, v, data)):
         return cycle.root_node in data['cycleStart']
 
     def __init__(self, plan):
@@ -304,18 +299,23 @@ class PlanWrapper(object):
 
         cycles = reduce(lambda x, y: y.union(x), self.__ss.cycles.values(), set([]))
 
-        cycles_dict = {c: [c_data for (_, _, c_data) in c.edges_iter(c.root_node, data=True)] for c in cycles}
         ext_steps = {}
         for c in cycles:
             ext_steps[c] = filter(lambda e: self.__filter_cycle_extensions(c, e),
                                   self.__graph.edges(data=True))
         for c in cycles:
-            c_edges = cycles_dict[c]
+            c_edges = list(c.edges())
 
             for (u, v, data) in ext_steps[c]:
-                for i, c_edge in enumerate(c_edges):
-                    source = u if i == 0 else self.__clone_node(u)
-                    dest = u if i == len(c_edges) - 1 else self.__clone_node(u)
+                c_root = c.root_node
+                last_node = None
+                for i in range(len(c_edges)):
+                    cu, cv, c_edge = list(c.edges_iter(c_root, data=True)).pop()
+                    source = u if i == 0 else last_node
+                    dest = u if i == len(c_edges) - 1 else self.__clone_node(c, cv, self.__graph.get_node_data(u))
+                    last_node = dest
+
+                    c_root = cv
                     existing_data = self.__graph.get_edge_data(source, dest)
 
                     on_property = {c_edge['onProperty']}
@@ -324,10 +324,11 @@ class PlanWrapper(object):
                     self.__graph.add_edge(source, dest, expectedType=c_edge['expectedType'],
                                           onProperty=on_property, cycle=True)
 
-    def __clone_node(self, node):
-        n = uuid()
-        n_data = self.__graph.get_node_data(node).copy()
-        n_data['spaces'] = []
+    def __clone_node(self, c, node, data):
+        n = BNode(uuid())
+        n_data = data.copy()
+        if 'seeds' in n_data:
+            del n_data['seeds']
         self.__graph.add_node(n, n_data)
         return n
 
@@ -337,12 +338,7 @@ class PlanWrapper(object):
 
     @property
     def roots(self):
-        def __predecessors(x):
-            in_edges = self.__graph.in_edges(x, data=True)
-            result = bool(filter(lambda (u, v, d): not d.get('cycle', False), in_edges))
-            return result
-
-        return [(node, data) for (node, data) in self.__graph.nodes(data=True) if not __predecessors(node)]
+        return [(node, data) for (node, data) in self.__graph.nodes(data=True) if data.get('seeds', False)]
 
     @property
     def patterns(self):
@@ -359,7 +355,7 @@ class PlanWrapper(object):
             if edge_data.get('cycle', False):
                 weight = 5000
             elif edge_data.get('onProperty', None) is not None:
-                weight = 1
+                weight = 1000
             aggr_dist = 1000
             patterns = n_data.get('byPattern', [])
             if patterns:
@@ -464,8 +460,11 @@ class PlanExecutor(object):
         self.__wrapper = PlanWrapper(plan)
         self.__plan = plan
         self.__resource_lock = RLock()
+        self.__tp_lock = RLock()
+        self.__node_lock = RLock()
         self.__locks = {}
         self.__completed = False
+        self.__aborted = False
         self.__last_success_format = None
         self.__last_iteration_ts = dt.now()
         self.__fragment_ttl = sys.maxint
@@ -487,6 +486,18 @@ class PlanExecutor(object):
                 self.__locks[uri] = Lock()
             return self.__locks[uri]
 
+    def tp_lock(self, seed, tp):
+        with self.__tp_lock:
+            if (seed, tp) not in self.__locks:
+                self.__locks[(seed, tp)] = Lock()
+            return self.__locks[(seed, tp)]
+
+    def node_lock(self, node, seed):
+        with self.__node_lock:
+            if (node, seed) not in self.__locks:
+                self.__locks[(node, seed)] = Lock()
+            return self.__locks[(node, seed)]
+
     def get_fragment(self, **kwargs):
         """
         Return a complete fragment.
@@ -501,7 +512,7 @@ class PlanExecutor(object):
         return graph
 
     def get_fragment_generator(self, workers=None, stop_event=None, queue_wait=None, queue_size=100, cache=None,
-                               loader=None, filters=None, follow_cycles=False):
+                               loader=None, filters=None, follow_cycles=True, type_strict=True):
 
         if workers is None:
             workers = multiprocessing.cpu_count()
@@ -512,7 +523,7 @@ class PlanExecutor(object):
         fragment = set([])
 
         if stop_event is None:
-            stop_event = Event()
+            stop_event = stopped
 
         if loader is None:
             loader = http_get
@@ -524,14 +535,14 @@ class PlanExecutor(object):
                 return cache.create(conjunctive=True)
 
         def __release_graph(g):
-            if cache is not None:
-                cache.release(g)
-            elif g is not None:
-                try:
+            try:
+                if cache is not None:
+                    cache.release(g)
+                elif g is not None:
                     g.remove((None, None, None))
                     g.close()
-                except:
-                    pass
+            except:
+                pass
 
         def __open_graph(gid, loader, format):
             self.__n_derefs += 1
@@ -540,7 +551,6 @@ class PlanExecutor(object):
                 if result is None and loader != http_get:
                     result = http_get(gid, format)
                 if isinstance(result, tuple):
-                    # not isinstance(result, bool):
                     content, headers = result
                     if not isinstance(content, Graph):
                         g = ConjunctiveGraph()
@@ -575,7 +585,9 @@ class PlanExecutor(object):
                     resource = __open_graph(uri, loader=loader, format=parse_format)
                     if isinstance(resource, bool):
                         return resource
-
+                except KeyboardInterrupt:
+                    stop_event.set()
+                    return
                 except Exception, e:
                     traceback.print_exc()
                     log.warn(e.message)
@@ -607,6 +619,8 @@ class PlanExecutor(object):
                 __dereference_uri(tree_graph, seed)
                 seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == link]
                 next_seeds.update(seed_pattern_objects)
+            except KeyboardInterrupt:
+                stop_event.set()
             except Exception as e:
                 traceback.print_exc()
                 log.warning(e.message)
@@ -637,208 +651,237 @@ class PlanExecutor(object):
             weight = int(x.s in var_filters) + int(x.o in var_filters)
             return weight
 
-        def __any_parent_filtered(space, parent, tp):
-            for (ps, link, cycle, vars) in parent:
-                if not cycle:
-                    for v in vars:
-                        if self.__wrapper.is_filtered(ps, space, v) and self.__wrapper.connected(v, tp.s):
-                            return True
-            return False
+        def __follow_in_breadth(n, next_seeds, tree_graph, parent=None):
+            try:
+                threads = []
+                for s in next_seeds:
+                    __check_stop()
+                    try:
+                        workers_queue.put_nowait(s)
+                        future = pool.submit(__follow_node, n, s, tree_graph, parent=parent)
+                        threads.append(future)
+                    except Queue.Full:
+                        # If all threads are busy...I'll do it myself
+                        __follow_node(n, s, tree_graph, parent=parent)
+
+                if len(threads) >= workers:
+                    wait(threads)
+                    [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                    threads = []
+
+                wait(threads)
+                [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                next_seeds.clear()
+            except (IndexError, KeyError):
+                traceback.print_exc()
+
+        def __process_candidates(candidates, space):
+            quads = set([])
+            predicate_pass = {}
+            candidates = sorted(candidates, key=lambda x: x[0].p)
+            for i in range(len(candidates)):
+                (tp, cand_seed, object) = candidates.pop()
+                cur_p = tp.p
+                if tp.p not in predicate_pass:
+                    predicate_pass[tp.p] = False
+
+                quad = (tp, cand_seed, tp.p, object)
+                s_passing = not self.__wrapper.is_filtered(cand_seed, space, tp.s)
+                if not s_passing:
+                    continue
+
+                o_passing = not self.__wrapper.is_filtered(object, space, tp.o)
+                if o_passing:
+                    predicate_pass[tp.p] = True
+                    quads.add(quad)
+
+            if not all(predicate_pass.values()):
+                quads.clear()
+            return quads
+
+        def __process_pattern(seed, space, tp, expected_types, check, graph):
+            candidates = set([])
+            with self.tp_lock(seed, tp):
+                if (space, tp.p, seed) in self.__node_seeds:
+                    return
+                self.__node_seeds.add((space, tp.p, seed))
+                self.__wrapper.filter_var(tp, tp.s)
+
+                if self.__wrapper.is_filtered(seed, space, tp.s):
+                    return
+
+                if isinstance(tp.s, URIRef) and seed != tp.s:
+                    return
+
+                else:  # tp.s is a Variable
+                    if tp.s in var_filters:
+                        for var_f in var_filters[tp.s]:
+                            context = QueryContext()
+                            context[tp.o] = seed
+                            passing = var_f.expr.eval(context) if hasattr(var_f.expr, 'eval') else bool(
+                                seed.toPython())
+                            if not passing:
+                                return
+
+                if tp.p != RDF.type or isinstance(tp.o, Variable):
+                    try:
+                        sobs = list(__process_pattern_link_seed(seed, graph, tp.p))
+
+                        # TODO: This may not apply when considering OPTIONAL support
+                        if not isinstance(tp.o, Variable) and not sobs:
+                            return
+
+                        if not sobs:
+                            return
+
+                        filtered = True
+                        obs_candidates = []
+                        for object in sobs:
+                            __check_stop()
+
+                            if not isinstance(tp.o, Variable):
+                                if object.n3() == tp.o.n3():
+                                    filtered = False
+                            else:
+                                if tp.o in var_filters:
+                                    for var_f in var_filters[tp.o]:
+                                        context = QueryContext()
+                                        context[tp.o] = object
+                                        passing = var_f.expr.eval(context) if hasattr(var_f.expr,
+                                                                                      'eval') else bool(
+                                            object.toPython())
+                                        if passing:
+                                            filtered = False
+                                else:
+                                    filtered = False
+
+                            if not filtered:
+                                candidate = (tp, seed, object)
+                                obs_candidates.append(candidate)
+                            else:
+                                return
+
+                        candidates.update(obs_candidates)
+                    except AttributeError as e:
+                        log.warning('Trying to find {} objects of {}: {}'.format(tp.p, seed, e.message))
+                else:
+                    if type_strict and check:
+                        __dereference_uri(graph, seed)
+                        types = set(
+                            graph.objects(subject=seed, predicate=RDF.type))
+                        if not set.intersection(types, expected_types):
+                            # print 'filtering ' + seed + ' for ' + str(tp.s)
+                            return
+
+                    candidates.add((tp, seed, tp.o))
+
+            return candidates
+
+        def __process_seed_patterns(seed, p_nodes, graph):
+            space_dict = {}
+            for n, n_data, e_data in p_nodes:
+                patterns = n_data.get('byPattern', [])
+                check = n_data.get('check', False)
+                expected_types = e_data.get('expectedType', set())
+                spaces = n_data['spaces']
+                for space in spaces:
+                    seed_v = set()
+                    candidates = set()
+                    space_dict[space] = {
+                        'candidates': candidates,
+                        'seed_v': seed_v
+                    }
+
+                    patterns = sorted(patterns, key=lambda x: __tp_weight(x), reverse=True)
+                    for tp in patterns:
+                        if tp.defined_by == space:
+                            seed_v.add(tp.s)
+                            tp_candidates = __process_pattern(seed, space, tp, expected_types, check, graph)
+                            if tp_candidates:
+                                candidates.update(tp_candidates)
+                            else:
+                                self.__wrapper.filter(seed, space, tp.s)
+                                candidates.clear()
+                                break
+
+            return space_dict
+
+        def __process_seed_links(seed, p_links, graph, parent):
+            for n, n_data, e_data in p_links:
+                on_property = e_data.get('onProperty', None)
+                next_seeds = set()
+                if on_property is not None:
+                    new_parent = parent[:]
+                    __process_link_seed(seed, graph, on_property, next_seeds)
+                    __follow_in_breadth(n, next_seeds, graph, new_parent)
 
         def __follow_node(node, seed, tree_graph, parent=None):
             if parent is None:
                 parent = []
-            candidates = set([])
-            quads = set([])
-            predicate_pass = {}
-            seed_variables = set([])
-            try:
-                if (node, seed) in self.__node_seeds:
-                    # print 'already visited: {} with {}'.format(node, seed)
-                    return
-                self.__node_seeds.add((node, seed))
 
-                for n, n_data, e_data in self.__wrapper.successors(node):
-                    expected_types = e_data.get('expectedType', None)
-                    patterns = n_data.get('byPattern', [])
-                    on_property = e_data.get('onProperty', None)
-                    on_cycle = e_data.get('cycle', False)
+            if len(parent) > 20:
+                return
+            if (node, seed) in parent:
+                return
 
-                    if not follow_cycles and on_cycle:
-                        continue
+            if (node, seed) in self.__node_seeds:
+                return
 
-                    spaces = [] if on_cycle else n_data['spaces']
-                    next_seeds = set([])
-                    for space in spaces:
-                        next_seeds.clear()
+            parent = parent[:]
+            parent.append((node, seed))
 
-                        last_tp = None
-                        sobs = []
+            with self.node_lock(node, seed):
+                try:
+                    if (node, seed) in self.__node_seeds:
+                        # print 'already visited: {} with {}'.format(node, seed)
+                        return
 
-                        for tp in sorted(patterns, key=lambda x: __tp_weight(x), reverse=True):
-                            predicate_pass[tp.p] = True
+                    self.__node_seeds.add((node, seed))
 
-                            if (space, on_property, tp.p, seed) in self.__node_seeds:
-                                # print 'already visited: {} {} for {}'.format(seed, on_property, tp.p)
-                                continue
-                            self.__node_seeds.add((space, on_property, tp.p, seed))
+                    successors = list(self.__wrapper.successors(node))
+                    pattern_succ = filter(lambda (n, n_data, e_data): n_data.get('byPattern', []), successors)
 
-                            if __any_parent_filtered(space, parent, tp):
-                                continue
+                    space_dict = __process_seed_patterns(seed, pattern_succ, tree_graph)
+                    if not (space_dict and not any([x['candidates'] for x in space_dict.values()])):
+                        link_succ = filter(
+                            lambda (n, n_data, e_data): not n_data.get('byPattern',
+                                                                       None) and e_data.get('onProperty',
+                                                                                            None) and not e_data.get(
+                                'cycle', False),
+                            successors)
 
-                            seed_variables.add(tp.s)
+                        __process_seed_links(seed, link_succ, tree_graph, parent)
 
-                            if space != tp.defined_by:
-                                continue
+                    for space, s_dict in space_dict.items():
+                        candidates = s_dict['candidates']
+                        seed_variables = s_dict['seed_v']
+                        quads = __process_candidates(candidates, space)
+                        if not quads:
+                            for v in seed_variables:
+                                self.__wrapper.filter(seed, space, v)
+                        else:
+                            for q in quads:
+                                __put_quad_in_queue(q)
 
-                            if self.__wrapper.is_filtered(seed, space, tp.s):
-                                continue
+                    if not follow_cycles:
+                        return
 
-                            if not on_cycle and isinstance(tp.s, URIRef) and seed != tp.s:
-                                self.__wrapper.filter(seed, space, tp.s)
-                                continue
-                            else:  # tp.s is a Variable
-                                if tp.s in var_filters:
-                                    for var_f in var_filters[tp.s]:
-                                        context = QueryContext()
-                                        context[tp.o] = seed
-                                        passing = var_f.expr.eval(context) if hasattr(var_f.expr, 'eval') else bool(
-                                            seed.toPython())
-                                        if not passing:
-                                            self.__wrapper.filter(seed, space, tp.s)
-                                            continue
+                    cycle_succ = filter(lambda (n, n_data, e_data): e_data.get('cycle', False), successors)
+                    next_seeds = set()
+                    for n, n_data, e_data in cycle_succ:
+                        on_property = e_data.get('onProperty', None)
+                        __process_link_seed(seed, tree_graph, on_property, next_seeds)
+                        next_seeds = set(filter(lambda s: (n, s) not in parent, next_seeds))
+                        if next_seeds:
+                            # print 'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
+                            __follow_in_breadth(n, next_seeds, tree_graph, parent)
 
-                            if tp.p != RDF.type:
-                                try:
-                                    if not last_tp or last_tp.p != tp.p:
-                                        sobs = list(__process_pattern_link_seed(seed, tree_graph, tp.p))
-
-                                    # TODO: This may not apply when considering OPTIONAL support
-                                    if not isinstance(tp.o, Variable) and not sobs:
-                                        predicate_pass[tp.p] = False
-                                        self.__wrapper.filter(seed, space, tp.s)
-
-                                    if not sobs and not on_cycle:
-                                        predicate_pass[tp.p] = False
-                                        self.__wrapper.filter_var(tp, tp.s)
-                                        self.__wrapper.filter(seed, space, tp.s)
-
-                                    filtered = False
-                                    obs_candidates = set([])
-                                    for object in sobs:
-                                        __check_stop()
-
-                                        if not isinstance(tp.o, Variable):
-                                            if object.n3() != tp.o.n3():
-                                                filtered = True
-                                                # break
-                                        else:
-                                            if tp.o in var_filters:
-                                                for var_f in var_filters[tp.o]:
-                                                    context = QueryContext()
-                                                    context[tp.o] = object
-                                                    passing = var_f.expr.eval(context) if hasattr(var_f.expr,
-                                                                                                  'eval') else bool(
-                                                        object.toPython())
-                                                    if not passing:
-                                                        self.__wrapper.filter(seed, space, tp.s)
-                                                        filtered = True
-                                                        # break
-
-                                        if not filtered:
-                                            candidate = (tp, seed, object)
-                                            obs_candidates.add(candidate)
-
-                                    candidates.update(obs_candidates)
-
-                                    if not next_seeds and tp.p == on_property:
-                                        next_seeds = set(sobs)
-
-                                except AttributeError as e:
-                                    log.warning('Trying to find {} objects of {}: {}'.format(tp.p, seed, e.message))
-                            else:
-                                put_quad = True
-                                if tp.check:
-                                    __dereference_uri(tree_graph, seed)
-                                    types = set(
-                                        tree_graph.objects(subject=seed, predicate=RDF.type))
-                                    if not set.intersection(types, expected_types):
-                                        put_quad = False
-                                if put_quad:
-                                    candidates.add((tp, seed, tp.o))
-                            last_tp = tp
-
-                    new_parent = parent
-                    if on_property is not None:
-                        if seed_variables:
-                            if not on_cycle and all(
-                                    [self.__wrapper.is_filtered(seed, space, v) for v in seed_variables]):
-                                continue
-
-                            new_parent = parent[:]
-                            new_parent.append((seed, on_property, on_cycle, seed_variables))
-
-                        if not next_seeds:
-                            __process_link_seed(seed, tree_graph, on_property, next_seeds)
-
-                        # if next_seeds and on_cycle:
-                        #     print 'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
-
-                    try:
-                        threads = []
-                        for s in next_seeds:
-                            __check_stop()
-                            try:
-                                workers_queue.put_nowait(s)
-                                future = pool.submit(__follow_node, n, s, tree_graph, parent=new_parent)
-                                threads.append(future)
-                            except Queue.Full:
-                                # If all threads are busy...I'll do it myself
-                                __follow_node(n, s, tree_graph, parent=new_parent)
-
-                            if len(threads) >= workers:
-                                wait(threads)
-                                [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
-                                threads = []
-
-                        wait(threads)
-                        [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
-                        next_seeds.clear()
-                    except (IndexError, KeyError):
-                        traceback.print_exc()
-
-                    for (tp, cand_seed, object) in candidates:
-                        quad = (tp, cand_seed, tp.p, object)
-                        passing = not self.__wrapper.is_filtered(cand_seed, space, tp.s)
-                        passing = passing and not self.__wrapper.is_filtered(object, space, tp.o)
-                        if not passing:
-                            if tp.p not in predicate_pass:
-                                predicate_pass[tp.p] = False
-                            continue
-
-                        predicate_pass[tp.p] = True
-                        quads.add(quad)
-
-                    try:
-                        if candidates and (not predicate_pass or not all(predicate_pass.values())):
-                            quads.clear()
-                            break
-                    finally:
-                        candidates.clear()
-
-                if all(predicate_pass.values()):
-                    for q in quads:
-                        __put_quad_in_queue(q)
-                elif predicate_pass:
-                    for v in seed_variables:
-                        self.__wrapper.filter(seed, space, v)
-                    quads.clear()
-
-            except Queue.Full:
-                stop_event.set()
-            except Exception as e:
-                traceback.print_exc()
-                log.error(e.message)
+                except (Queue.Full, StopException):
+                    stop_event.set()
+                except Exception as e:
+                    traceback.print_exc()
+                    log.error(e.message)
+                    raise e
 
         def get_fragment_triples():
             """
@@ -847,59 +890,32 @@ class PlanExecutor(object):
             """
 
             def execute_plan():
-                for tree, data in self.__wrapper.roots:
-                    # Prepare an dedicated graph for the current tree and a set of type triples (?s a Concept)
-                    # to be evaluated retrospectively
-                    tree_graph = __create_graph()
-                    self.__node_seeds.clear()
-                    self.__wrapper.clear_filters()
+                try:
+                    for tree, data in self.__wrapper.roots:
+                        # Prepare an dedicated graph for the current tree and a set of type triples (?s a Concept)
+                        # to be evaluated retrospectively
+                        tree_graph = __create_graph()
+                        self.__node_seeds.clear()
+                        self.__wrapper.clear_filters()
 
-                    try:
-                        # Get all seeds of the current tree
-                        seeds = set(data['seeds'])
-                        # Check if the tree root is a pattern node and in that case, adds a type triple to the
-                        # respective set
-                        tree_patterns = data.get('byPattern', [])
-                        root_type_candidates = set([])
-                        for tp in [tp for tp in tree_patterns if tp.p == RDF.type]:
-                            [root_type_candidates.add((tp, seed, tp.o)) for seed in seeds]
+                        try:
+                            # Get all seeds of the current tree
+                            seeds = set(data['seeds'])
+                            __follow_in_breadth(tree, seeds, tree_graph)
+                        except StopException, e:
+                            raise e
+                        finally:
+                            __release_graph(tree_graph)
 
-                        threads = []
-                        for seed in seeds:
-                            try:
-                                workers_queue.put_nowait(seed)
-                                future = pool.submit(__follow_node, tree, seed, tree_graph)
-                                threads.append(future)
-                            except Queue.Full:
-                                # If all threads are busy...I'll do it myself
-                                __follow_node(tree, seed, tree_graph)
-
-                            if len(threads) >= workers:
-                                wait(threads)
-                                [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
-                                threads = []
-
-                        wait(threads)
-                        [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
-
-                        for (tp, seed, type) in root_type_candidates:
-                            passing = not self.__wrapper.is_filtered(seed, tp.defined_by, tp.s)
-                            if not passing:
-                                continue
-
-                            __put_quad_in_queue((tp, seed, RDF.type, type))
-
-                    finally:
-                        __release_graph(tree_graph)
-
-                self.__completed = True
-                __update_fragment_ttl()
+                    self.__completed = True
+                    __update_fragment_ttl()
+                except StopException:
+                    self.__aborted = True
 
             thread = Thread(target=execute_plan)
-            thread.daemon = True
             thread.start()
 
-            while not self.__completed or not fragment_queue.empty():
+            while not self.__aborted and (not self.__completed or not fragment_queue.empty()):
                 try:
                     q = fragment_queue.get(timeout=0.01)
                     fragment_queue.task_done()
@@ -907,10 +923,19 @@ class PlanExecutor(object):
                 except Queue.Empty:
                     if self.__completed:
                         break
+                except KeyboardInterrupt, e:
+                    stop_event.set()
+                    pool.shutdown(wait=True)
+                    raise e
+
                 self.__last_iteration_ts = dt.now()
             thread.join()
 
-            log.info('Finished plan execution!')
+            if self.__aborted:
+                log.info('Aborted plan execution!')
+                raise StopException('Aborted plan execution')
+            else:
+                log.info('Finished plan execution!')
 
         var_filters = {}
         if filters:
