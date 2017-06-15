@@ -117,7 +117,7 @@ def evalBGP(ctx, bgp):
 def evalExtend(ctx, extend):
     # TODO: Deal with dict returned from evalPart from GROUP BY
 
-    print 'evaluating extend {}'.format(extend)
+    # print 'evaluating extend {}'.format(extend)
 
     for c in evalPart(ctx, extend.p):
         try:
@@ -139,7 +139,7 @@ def evalLazyJoin(ctx, join):
     hopefully evaluating much fewer triples
     """
 
-    print 'evaluating lazy join {}'.format(join)
+    # print 'evaluating lazy join {}'.format(join)
 
     for a in evalPart(ctx, join.p1):
         c = ctx.thaw(a)
@@ -151,7 +151,7 @@ def evalJoin(ctx, join):
     # TODO: Deal with dict returned from evalPart from GROUP BY
     # only ever for join.p1
 
-    print 'evaluating join {}'.format(join)
+    # print 'evaluating join {}'.format(join)
 
     if join.lazy:
         return evalLazyJoin(ctx, join)
@@ -164,7 +164,7 @@ def evalJoin(ctx, join):
 def evalUnion(ctx, union):
     res = set()
 
-    print 'evaluating union {}'.format(union)
+    # print 'evaluating union {}'.format(union)
 
     for x in evalPart(ctx, union.p1):
         res.add(x)
@@ -206,7 +206,8 @@ __sparql_op_symbols = {
     'ConditionalOrExpression': '||',
     'UnaryNot': '!',
     'UnaryMinus': '-',
-    'UnaryPlus': '+'
+    'UnaryPlus': '+',
+    'Function': ','
 }
 
 
@@ -228,6 +229,8 @@ def __serialize_expr(expr, context=None):
 
             if 'Unary' in expr.name:
                 return u'{}{}'.format(__sparql_op_symbols[expr.name], expr_str)
+            elif 'Function' in expr.name:
+                return u'{}({})'.format(expr['iri'].n3(), __serialize_expr(expr.expr, expr.name))
 
             other_str = __serialize_expr(expr['other'], expr.name)
             if expr.name in __sparql_op_symbols:
@@ -518,7 +521,7 @@ def evalConstructQuery(ctx, query):
 
 
 class AgoraQueryContext(QueryContext):
-    def __init__(self, graph=None, bindings=None, incremental=True):
+    def __init__(self, graph=None, bindings=None, incremental=True, **kwargs):
         super(AgoraQueryContext, self).__init__(graph, bindings)
         self.incremental = incremental
         self.filters = {}
