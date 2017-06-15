@@ -24,7 +24,6 @@ import re
 import traceback
 from StringIO import StringIO
 from collections import namedtuple
-from operator import __add__
 from urlparse import urlparse
 
 import networkx as nx
@@ -39,6 +38,7 @@ log = logging.getLogger('agora.engine.plan.agp')
 
 
 def extend_uri(uri, prefixes):
+    # type: (str, dict) -> str
     if ':' in uri:
         prefix_parts = uri.split(':')
         if len(prefix_parts) == 2 and prefix_parts[0] in prefixes:
@@ -48,10 +48,12 @@ def extend_uri(uri, prefixes):
 
 
 def is_variable(arg):
+    # type: (str) -> bool
     return arg.startswith('?')
 
 
 def is_uri(uri, prefixes):
+    # type: (str, dict) -> bool
     if uri.startswith('<') and uri.endswith('>'):
         uri = uri.lstrip('<').rstrip('>')
         parse = urlparse(uri, allow_fragments=True)
@@ -69,6 +71,7 @@ class TP(namedtuple('TP', "s p o")):
         return new(cls, iterable)
 
     def __repr__(self):
+        # type: () -> str
         def elm_to_string(elm):
             return elm.n3()
 
@@ -77,7 +80,7 @@ class TP(namedtuple('TP', "s p o")):
 
     @staticmethod
     def from_string(st, prefixes=None, graph=None):
-        # type: (str, dict) -> TP
+        # type: (str, dict, Graph) -> TP
         st = st.strip()
         if graph is None:
             graph = Graph()
@@ -92,7 +95,7 @@ class TP(namedtuple('TP', "s p o")):
             s, p, o = list(graph.triples((None, None, None))).pop()
 
             return TP._make([s, p, o])
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
             raise TypeError('Bad TP arguments: {}'.format(st))
 
@@ -105,6 +108,7 @@ class AGP(set):
 
     @property
     def prefixes(self):
+        # type: () -> dict
         return self.__prefixes
 
     @property
@@ -129,8 +133,21 @@ class AGP(set):
 
     @property
     def roots(self):
+        # type: () -> iter
+        def filter_root(x):
+            r = x[1] == min_in
+            if min_in > 0:
+                r = r and x[0] in cycle_elms
+            return r
+
         w = self.wire
-        return map(lambda x: x[0], filter(lambda x: x[1] == 0, list(w.in_degree_iter())))
+        cycle_elms = list(nx.simple_cycles(w))
+        if cycle_elms:
+            cycle_elms = set.union(*map(lambda x: set(x), list(nx.simple_cycles(w))))
+        in_deg = list(w.in_degree_iter())
+        min_in = min(map(lambda x: x[1], in_deg))
+        roots = map(lambda x: x[0], filter(filter_root, list(w.in_degree_iter())))
+        return roots
 
     def __nodify(self, elm, variables):
         if isinstance(elm, Variable):
@@ -147,7 +164,7 @@ class AGP(set):
 
     @property
     def graph(self):
-
+        # type: () -> ConjunctiveGraph
         if not self.__graph:
             for prefix in self.__prefixes:
                 self.__graph.bind(prefix, self.__prefixes[prefix])
@@ -177,6 +194,7 @@ class AGP(set):
 
     @staticmethod
     def from_string(st, prefixes):
+        # type: (str, dict) -> AGP
         gp = None
         if st.startswith('{') and st.endswith('}'):
             st = st.replace('{', '').replace('}', '').strip()
@@ -188,20 +206,20 @@ class AGP(set):
         return gp
 
     def get_tp_context(self, (s, p, o)):
+        # type: (tuple) -> str
         return str(list(self.graph.contexts((s, p, o))).pop().identifier)
 
     def __repr__(self):
+        # type: () -> str
         return '{ %s }' % ' . '.join([str(tp) for tp in self])
-        # tp_strings = map(lambda x: str(x), self)
-        # return '{ %s}' % reduce(lambda x, y: (x + '%s . ' % str(y)), tp_strings, '')
 
     def mapping(self, other):
-        # type: (AGP) -> iter
+        # type: (AGP) -> dict
         """
         :return: If there is any, the mapping with another graph pattern
         """
         if not isinstance(other, AGP):
-            return ()
+            return {}
 
         my_wire = self.wire
         others_wire = other.wire
@@ -214,7 +232,7 @@ class AGP(set):
 
         matcher = DiGraphMatcher(my_wire, others_wire, node_match=__node_match, edge_match=__edge_match)
         mapping = list(matcher.isomorphisms_iter())
-        if len(mapping) == 1:
+        if len(mapping) > 0:
             return mapping.pop()
         else:
             return dict()
