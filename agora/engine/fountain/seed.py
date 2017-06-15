@@ -35,10 +35,18 @@ log = logging.getLogger('agora.engine.fountain.seed')
 
 
 class SeedManager(object):
-    def __init__(self, index):
-        # type: (Index) -> SeedManager
-        self.__index = index
+    def __init__(self):
+        # type: () -> SeedManager
+        self.__index = None
         self.__cache = Cache()
+
+    @property
+    def index(self):
+        return self.__index
+
+    @index.setter
+    def index(self, i):
+        self.__index = i
         self.__cache.watch(self.__index.schema.cache)
 
     def add_seed(self, uri, type):
