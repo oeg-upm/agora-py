@@ -20,10 +20,10 @@
 """
 import logging
 
-from agora.engine.utils.cache import Cache, ContextGraph, cached
-from agora.engine.utils.graph import get_cached_triple_store
 from rdflib import URIRef, BNode, Graph
 from rdflib.namespace import RDFS, NamespaceManager
+
+from agora.engine.utils.cache import Cache, ContextGraph, cached
 
 __author__ = 'Fernando Serena'
 
@@ -31,7 +31,7 @@ log = logging.getLogger('agora.engine.fountain.path')
 
 
 def __flat_slice(iterable):
-    # type: iter -> set
+    # type: (iter) -> set
     lst = filter(lambda x: x, list(iterable))
     for i, _ in enumerate(lst):
         while hasattr(lst[i], "__iter__") and not isinstance(lst[i], basestring):
@@ -40,7 +40,7 @@ def __flat_slice(iterable):
 
 
 def __q_name(ns, term):
-    # type: (NamespaceManager, Any) -> Any
+    # type: (NamespaceManager, any) -> any
     n3_method = getattr(term, "n3", None)
     if callable(n3_method):
         return term.n3(ns)
@@ -66,7 +66,7 @@ def __extend_prefixed(ns, pu):
 
 
 def __extend_with(f, graph, *args):
-    # type: (Callable, Graph, list) -> set
+    # type: (callable, Graph, iter) -> iter
     args = __flat_slice(args)
     extension = __flat_slice([f(graph, t) for t in args])
     return set.union(args, extension)
@@ -175,7 +175,7 @@ def _get_properties(graph):
 
 # @__context
 def _is_object_property(graph, prop):
-    # type: (Graph, str) -> set
+    # type: (Graph, str) -> bool
     evidence = __query(graph, """ASK {
                                     { %s a owl:ObjectProperty }
                                     UNION
@@ -202,7 +202,7 @@ def _is_object_property(graph, prop):
                                     }
                                    }""" % (prop, prop))
 
-    return False if not evidence else evidence.pop()
+    return False if not evidence else bool(evidence.pop())
 
 
 # @__context
@@ -307,7 +307,7 @@ def _get_subtypes(graph, ty):
                                                                                                    _prefixes(graph),
                                                                                                    ty))))
 
-    return filter(lambda x: str(x) != ty, res)
+    return set(filter(lambda x: str(x) != ty, res))
 
 
 # @__context
@@ -347,7 +347,7 @@ def _get_type_references(graph, ty):
 
 
 def _context(f):
-    # type: (Callable) -> Callable
+    # type: (callable) -> callable
     def wrap(self=None, *args, **kwargs):
         return cached(self.cache)(f)(self, *args, **kwargs)
 
@@ -355,13 +355,11 @@ def _context(f):
 
 
 class Schema(object):
-    def __init__(self, persist_mode=False, base=None, path=None):
+    def __init__(self):
         self.__cache = Cache()
         self.__graph = None
         self.__namespaces = {}
         self.__prefixes = {}
-        self.graph = get_cached_triple_store(self.__cache, persist_mode, base=base, path=path)
-        self.__update_ns_dicts()
 
     @property
     def cache(self):
@@ -377,6 +375,7 @@ class Schema(object):
     def graph(self, g):
         self.__graph = g
         self.__graph.store.graph_aware = False
+        self.__update_ns_dicts()
 
     def __update_ns_dicts(self):
         self.__namespaces.update([(uri, prefix) for (prefix, uri) in self.__graph.namespaces()])
@@ -401,7 +400,7 @@ class Schema(object):
 
     @property
     def contexts(self):
-        # type: () -> dict
+        # type: () -> iter
         return _contexts(self.graph)
 
     def get_context(self, id):
@@ -412,18 +411,17 @@ class Schema(object):
     def prefixes(self):
         # type: () -> dict
         return self.__prefixes
-        # return _prefixes(self.graph)
 
     @_context
     def get_types(self, context=None):
-        # type: (Graph) -> iter
+        # type: (object) -> iter
         if not isinstance(context, ContextGraph):
             context = self.graph.get_context(context) if context is not None else self.graph
         return _get_types(context)
 
     @_context
     def get_properties(self, context=None):
-        # type: (Graph) -> iter
+        # type: (object) -> iter
         if not isinstance(context, ContextGraph):
             context = self.graph.get_context(context) if context is not None else self.graph
         return _get_properties(context)
