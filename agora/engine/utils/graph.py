@@ -20,28 +20,21 @@
 """
 import logging
 import shutil
+from threading import RLock
 
-import os
-from agora.engine.utils.cache import ContextGraph
 from rdflib import ConjunctiveGraph
+
+from agora.engine.utils import prepare_store_path
+from agora.engine.utils.cache import ContextGraph
 
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.engine.utils.cache')
 
 
-def __prepare_store_path(base, path):
-    if not os.path.exists(base):
-        os.makedirs(base)
-    if not os.path.exists('{}/{}'.format(base, path)):
-        os.makedirs('{}/{}'.format(base, path))
-
-
-def get_cached_triple_store(cache, persist_mode=False, base='store', path=None):
+def get_cached_triple_store(cache, persist_mode=False, base='store', path='', **kwargs):
     if persist_mode:
-        if path is None:
-            path = 'resources'
-        __prepare_store_path(base, path)
+        prepare_store_path(base, path)
         graph = ContextGraph(cache, 'Sleepycat')
         graph.open('{}/{}'.format(base, path), create=True)
     else:
@@ -51,13 +44,20 @@ def get_cached_triple_store(cache, persist_mode=False, base='store', path=None):
     return graph
 
 
-def get_triple_store(persist_mode=False, base='store', path=None):
+_stores = {}
+_st_lock = RLock()
+
+
+def get_triple_store(persist_mode=False, base='store', path='', **kwargs):
     if persist_mode:
-        if path is None:
-            path = 'resources'
-        __prepare_store_path(base, path)
-        graph = ConjunctiveGraph('Sleepycat', identifier=path)
-        graph.open('{}/{}'.format(base, path), create=True)
+        st_id = (base, path)
+        with _st_lock:
+            if st_id not in _stores:
+                prepare_store_path(base, path)
+                graph = ConjunctiveGraph('Sleepycat', identifier=path)
+                graph.open('{}/{}'.format(base, path), create=True)
+                _stores[st_id] = graph
+            graph = _stores[st_id]
     else:
         graph = ConjunctiveGraph()
         graph.store.graph_aware = False
