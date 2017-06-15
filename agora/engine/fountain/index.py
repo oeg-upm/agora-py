@@ -20,28 +20,22 @@
 """
 
 import logging
-import multiprocessing
 import traceback
+from datetime import datetime as dt
 
 import redis
-import sys
+from concurrent.futures import wait
+
 from agora.engine.fountain.schema import Schema
 from agora.engine.utils.cache import cached
-from agora.engine.utils.kv import get_kv
-from concurrent.futures import wait
-from concurrent.futures.thread import ThreadPoolExecutor
-from datetime import datetime as dt
-from redis.exceptions import RedisError, BusyLoadingError
 
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.engine.fountain.index')
 
-tpool = ThreadPoolExecutor(multiprocessing.cpu_count())
-
 
 def __get_by_pattern(r, pattern, func):
-    # type: (redis.StrictRedis, str, Callable) -> list
+    # type: (redis.StrictRedis, str, callable) -> list
 
     def get_all():
         for k in pkeys:
@@ -52,7 +46,7 @@ def __get_by_pattern(r, pattern, func):
 
 
 def __remove_from_sets(r, values, *args):
-    # type: (redis.StrictRedis, iter, list) -> None
+    # type: (redis.StrictRedis, iter, iter) -> None
 
     for pattern in args:
         keys = r.keys(pattern)
@@ -216,7 +210,7 @@ def _extract_vocabulary(schema, r, vid):
 
 
 def _get_types(r, vid=None):
-    # type: (redis.StrictRedis, str) -> set
+    # type: (redis.StrictRedis, str) -> iter
 
     def shared_type(t):
         return any(filter(lambda k: r.sismember(k, t), all_type_keys))
@@ -231,7 +225,7 @@ def _get_types(r, vid=None):
 
 
 def _get_properties(r, vid=None):
-    # type: (redis.StrictRedis, str) -> set
+    # type: (redis.StrictRedis, str) -> iter
 
     def shared_property(t):
         return any(filter(lambda k: r.sismember(k, t), all_prop_keys))
@@ -285,12 +279,12 @@ def _get_property(r, prop):
 
 def _is_property(r, prop):
     # type: (redis.StrictRedis, str) -> bool
-    return len(r.keys('*:properties:{}:*'.format(prop)))
+    return bool(len(r.keys('*:properties:{}:*'.format(prop))))
 
 
 def _is_type(r, ty):
     # type: (redis.StrictRedis, str) -> bool
-    return len(r.keys('*:types:{}:*'.format(ty)))
+    return bool(len(r.keys('*:types:{}:*'.format(ty))))
 
 
 def _get_type(r, ty):
@@ -311,7 +305,7 @@ def _get_type(r, ty):
 
 
 def _cached(f):
-    # type: (Callable) -> Callable
+    # type: (callable) -> callable
     def wrap(self=None, *args, **kwargs):
         return cached(self.schema.cache)(f)(self, *args, **kwargs)
 
@@ -319,10 +313,9 @@ def _cached(f):
 
 
 class Index(object):
-    def __init__(self, persist_mode=False, redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None):
-        # () -> Index
+    def __init__(self):
         self.__schema = None
-        self.__r = get_kv(persist_mode, redis_host, redis_port, redis_db, redis_file)
+        self.__r = None
 
     @property
     def schema(self):
