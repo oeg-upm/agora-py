@@ -54,7 +54,7 @@ class Cache(dict):
 
 
 def cached(cache, level=0):
-    # type: (Cache, int) -> Callable
+    # type: (Cache, int) -> callable
     def d(f):
         @wraps(f)
         def wrap(*args, **kwargs):
@@ -103,6 +103,6 @@ class ContextGraph(ConjunctiveGraph):
         self.__cache.clear()
 
     def get_context(self, identifier, quoted=False):
-        # type: (Any, bool) -> SubGraph
+        # type: (any, bool) -> SubGraph
         return SubGraph(self.__cache, store=self.store, identifier=identifier,
                         namespace_manager=self.namespace_manager)

@@ -21,12 +21,11 @@
 """
 
 import calendar
-import email.utils as eut
 import logging
 import math
 import shutil
 import traceback
-from datetime import datetime as dt, timedelta as delta, datetime
+from datetime import datetime as dt, timedelta as delta
 from threading import Thread, Lock
 from time import sleep
 
@@ -34,10 +33,10 @@ import shortuuid
 from concurrent.futures import ThreadPoolExecutor
 from rdflib import ConjunctiveGraph
 from rdflib.graph import Graph
-from werkzeug.http import parse_dict_header
 
 from agora.collector.execution import parse_rdf
 from agora.collector.http import http_get, extract_ttl
+from agora.engine.utils import stopped
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
 
@@ -46,6 +45,18 @@ __author__ = 'Fernando Serena'
 log = logging.getLogger('agora.collector.cache')
 
 tpool = ThreadPoolExecutor(max_workers=1)
+
+_caches = {}
+_lock = Lock()
+
+
+def get(**kwargs):
+    tuple_id = tuple([kwargs[k] for k in sorted(kwargs.keys())])
+    with _lock:
+        if tuple_id not in _caches:
+            c = RedisCache(**kwargs)
+            _caches[tuple_id] = c
+        return _caches[tuple_id]
 
 
 class RedisCache(object):
@@ -64,7 +75,7 @@ class RedisCache(object):
         self.__resource_path = path
         self.__resource_cache = get_triple_store(persist_mode=persist_mode,
                                                  base=base, path=path)
-        self._r = get_kv(persist_mode, redis_host, redis_port, redis_db, redis_file)
+        self._r = get_kv(persist_mode, redis_host, redis_port, redis_db, redis_file, base=base, path=path)
 
         self.__resources_ts = {}
 
@@ -126,7 +137,7 @@ class RedisCache(object):
             return self.__locks[uri]
 
     def __purge(self):
-        while self.__enabled:
+        while self.__enabled and not stopped.is_set():
             try:
                 obsolete = filter(
                     lambda x: not self._r.exists('{}:cache:{}'.format(self.__key_prefix, self.__uuids[x])),
@@ -148,13 +159,14 @@ class RedisCache(object):
                                         del self.__locks[uri]
                                     del self.__uuids[uri]
                                     del self.__uris[uuid]
-                                except Exception, e:
+                                except Exception:
                                     traceback.print_exc()
                                     log.error('Purging resource {}'.format(uri))
                                 p.execute()
             except Exception, e:
                 traceback.print_exc()
                 log.error(e.message)
+                self.__enabled = False
             sleep(1)
 
     def create(self, conjunctive=False, gid=None, loader=None, format=None):
@@ -235,7 +247,3 @@ class RedisCache(object):
 
     def close(self):
         self.__enabled = False
-        tpool.shutdown(wait=True)
-
-    def __del__(self):
-        self.close()
