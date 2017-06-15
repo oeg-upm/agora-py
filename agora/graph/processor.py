@@ -19,7 +19,6 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import logging
-from datetime import datetime
 
 from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.parser import parseQuery
@@ -67,18 +66,11 @@ class FragmentProcessor(SPARQLProcessor):
         the query and will be overridden by any BASE given in the query.
         """
 
-        start = datetime.now()
         if not isinstance(strOrQuery, Query):
             parsetree = parseQuery(strOrQuery)
             query = translateQuery(parsetree, base, initNs)
         else:
             query = strOrQuery
-        try:
-            log.debug(
-                u'Took {}ms to parse the SPARQL query: {}'.format((datetime.now() - start).total_seconds(),
-                                                                  str(strOrQuery)))
-        except Exception:
-            pass
 
         collector = kwargs.get('collector', None)
         graph = kwargs.get('graph', None)

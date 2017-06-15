@@ -23,6 +23,8 @@ import logging
 import re
 from StringIO import StringIO
 
+from agora.engine.fountain import AbstractFountain
+
 from agora.engine.plan import AGP
 from agora.engine.plan import AbstractPlanner
 from agora.server import Server, TURTLE, HTML, Client, APIError
@@ -35,13 +37,14 @@ log = logging.getLogger('agora.server.planner')
 
 
 def build(planner, server=None, import_name=__name__):
-    # type: (AbstractPlanner, Server, str) -> AgoraServer
+    # type: (AbstractPlanner, Server, str) -> Server
 
     if server is None:
         server = Server(import_name)
 
     @server.get('/plan', produce_types=(TURTLE, HTML))
     def make_plan():
+        # type: () -> str
         try:
             agp_str = server.request_args.get('agp', '{}')
             agp_str = agp_str.lstrip('{').rstrip('}').strip()
@@ -63,6 +66,7 @@ class PlannerClient(Client, AbstractPlanner):
         self.__fountain = fc(host, port) if fountain is None else fountain
 
     def make_plan(self, agp):
+        # type: (AGP) -> Graph
         response = self._get_request('plan?agp=%s' % agp, accept='text/turtle')
         graph = Graph()
         graph.parse(StringIO(response), format='text/turtle')
@@ -70,6 +74,7 @@ class PlannerClient(Client, AbstractPlanner):
 
     @property
     def fountain(self):
+        # type: () -> AbstractFountain
         return self.__fountain
 
 

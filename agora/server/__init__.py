@@ -23,7 +23,6 @@ import logging
 import os
 import urlparse
 from functools import wraps
-from urllib import urlencode
 
 import requests
 from flask import Flask, jsonify, request, url_for
@@ -115,7 +114,7 @@ class Server(Flask):
         return request.args
 
     def get(self, rule, produce_types=(JSON, HTML,)):
-        # type: (str, iter) -> Callable
+        # type: (str, iter) -> callable
         def decorator(f):
             @wraps(f)
             def wrap(*args, **kwargs):
@@ -127,7 +126,7 @@ class Server(Flask):
         return decorator
 
     def post(self, rule, consume_types=(JSON,), produce_types=()):
-        # type: (str, iter, iter) -> Callable
+        # type: (str, iter, iter) -> callable
         def decorator(f):
             @wraps(f)
             def wrap(*args, **kwargs):
@@ -149,7 +148,7 @@ class Server(Flask):
         return decorator
 
     def put(self, rule, consume_types=(JSON,), produce_types=()):
-        # type: (str, iter, iter) -> Callable
+        # type: (str, iter, iter) -> callable
         def decorator(f):
             @wraps(f)
             def wrap(*args, **kwargs):
@@ -169,7 +168,7 @@ class Server(Flask):
         return decorator
 
     def delete(self, rule, produce_types=()):
-        # type: (str, iter) -> Callable
+        # type: (str, iter) -> callable
         def decorator(f):
             @wraps(f)
             def wrap(*args, **kwargs):

@@ -20,13 +20,12 @@
 """
 
 import logging
+from datetime import datetime
 
 from agora import Agora, setup_logging
 from agora.collector.cache import RedisCache
-from agora.collector.scholar import Scholar
 from agora.engine.fountain.onto import DuplicateVocabulary
 from agora.examples.movies import load_films_from_dbpedia
-from datetime import datetime
 
 __author__ = 'Fernando Serena'
 
@@ -34,67 +33,71 @@ __author__ = 'Fernando Serena'
 setup_logging(logging.DEBUG)
 
 # Create a cache for fragment collection
-cache = RedisCache(min_cache_time=10, persist_mode=True, path='cache', redis_file='store/cache/cache.db')
-
+cache = RedisCache(min_cache_time=10, persist_mode=True, path='cache', redis_file='cache.db')
 # Agora object
-agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
+agora = Agora(persist_mode=True, redis_file='fountain.db', path='fountain')
+try:
+    # agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
 
-# Open and add the vocabulary that we want to use to explore movies and associated data in dbpedia
-with open('movies.ttl') as f:
-    try:
-        agora.fountain.add_vocabulary(f.read())
-    except DuplicateVocabulary:
-        pass
+    # Open and add the vocabulary that we want to use to explore movies and associated data in dbpedia
+    with open('movies.ttl') as f:
+        try:
+            agora.fountain.add_vocabulary(f.read())
+        except DuplicateVocabulary:
+            pass
 
-# Each film URI found in dbpedia is added to Agora as a seed
-for film in load_films_from_dbpedia():
-    try:
-        agora.fountain.add_seed(unicode(film), 'dbpedia-owl:Film')
-    except Exception:
-        pass
+    # Each film URI found in dbpedia is added to Agora as a seed
+    for film in load_films_from_dbpedia():
+        try:
+            agora.fountain.add_seed(unicode(film[0]), 'dbpedia-owl:Film')
+        except Exception:
+            pass
 
-# Example queries
+    # Example queries
 
-# Example queries
-queries = ["""SELECT * WHERE {?film foaf:name ?name .
-                               ?film dbpedia-owl:starring ?actor .
-                               OPTIONAL {?actor dbp:birthName ?birth }
-                              FILTER (STR(?name)="2046")}"""]
+    # Example queries
+    queries = ["""SELECT * WHERE {?film foaf:name ?name .
+                                   ?film dbpedia-owl:starring ?actor .
+                                   OPTIONAL {?actor dbp:birthName ?birth }
+                                  }"""]
 
-# queries = ["""SELECT * WHERE {?film foaf:name ?name .
-#                                            ?film dbpedia-owl:starring ?actor
-#                                           }"""]
+    # queries = ["""SELECT * WHERE {?film foaf:name ?name .
+    #                                            ?film dbpedia-owl:starring ?actor
+    #                                           }"""]
 
-# queries = ["""SELECT * WHERE {?film foaf:name ?name .
-#                                            ?film dbpedia-owl:starring ?actor
-#                                           }"""]
+    # queries = ["""SELECT * WHERE {?film foaf:name ?name .
+    #                                            ?film dbpedia-owl:starring ?actor
+    #                                           }"""]
 
-# queries = ["""SELECT DISTINCT ?actor WHERE { ?film foaf:name "10"@en .
-#                                              ?film dbpedia-owl:starring ?actor .
-#                                              ?actor dbp:birthName "Mary Cathleen Collins"@en
-#                                           }"""]
+    # queries = ["""SELECT DISTINCT ?actor WHERE { ?film foaf:name "10"@en .
+    #                                              ?film dbpedia-owl:starring ?actor .
+    #                                              ?actor dbp:birthName "Mary Cathleen Collins"@en
+    #                                           }"""]
 
-# queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor ;
-#                                  dbp:birthName ?name .
-#                               }"""]
+    # queries = ["""SELECT * WHERE {?s dbpedia-owl:starring ?actor ;
+    #                                  dbp:birthName ?name .
+    #                               }"""]
 
-elapsed = []
+    elapsed = []
 
-for query in queries:
-    pre = datetime.now()
-# Ask agora for results of the given query,
-# evaluating candidate results for each fragment triple collected (chunk_size=1)
-# -> Removing chunk_size argument forces to wait until all relevant triples are collected
-    n = 0
-    for row in agora.query(query, cache=cache):
-        print '[', (datetime.now() - pre).total_seconds(), '] solution:',
-        for label in row.labels:
-            if row[label] is not None:
-                print label + '=' + (row[label]).toPython(),
-        print
-        n += 1
-    print n, 'solutions'
-    post = datetime.now()
-    elapsed.append((post - pre).total_seconds())
+    for query in queries:
+        pre = datetime.now()
+        # Ask agora for results of the given query,
+        # evaluating candidate results for each fragment triple collected (chunk_size=1)
+        # -> Removing chunk_size argument forces to wait until all relevant triples are collected
+        n = 0
+        for row in agora.query(query, cache=cache):
+            print '[', (datetime.now() - pre).total_seconds(), '] solution:',
+            for label in row.labels:
+                if row[label] is not None:
+                    print label + '=' + (row[label]).toPython(),
+            print
+            n += 1
+        print n, 'solutions'
+        post = datetime.now()
+        elapsed.append((post - pre).total_seconds())
 
-print elapsed
+    print elapsed
+except (KeyboardInterrupt, SystemExit):
+    Agora.close()
+

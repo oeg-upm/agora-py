@@ -31,7 +31,7 @@ log = logging.getLogger('agora.server.fountain')
 
 
 def build(fountain, server=None, import_name=__name__):
-    # type: (AbstractFountain, Server, str) -> AgoraServer
+    # type: (AbstractFountain, Server, str) -> Server
 
     if server is None:
         server = Server(import_name)

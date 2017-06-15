@@ -34,79 +34,81 @@ __author__ = 'Fernando Serena'
 setup_logging(logging.DEBUG)
 
 # Create a cache for fragment collection
-cache = RedisCache(min_cache_time=10, persist_mode=True, path='cache', redis_file='store/cache/cache.db')
-
+cache = RedisCache(min_cache_time=10, persist_mode=True, path='cache', redis_file='cache.db')
 # Agora object
-agora = Agora(persist_mode=True, redis_file='store/fountain/fountain.db', path='fountain')
+agora = Agora(persist_mode=True, redis_file='fountain.db', path='fountain')
 
-# Open and add the vocabulary that we want to use to explore movies and associated data in dbpedia
-with open('movies.ttl') as f:
-    try:
-        agora.fountain.add_vocabulary(f.read())
-    except DuplicateVocabulary:
-        pass
+try:
+    # Open and add the vocabulary that we want to use to explore movies and associated data in dbpedia
+    with open('movies.ttl') as f:
+        try:
+            agora.fountain.add_vocabulary(f.read())
+        except DuplicateVocabulary:
+            pass
 
-# Each film URI found in dbpedia is added to Agora as a seed
-for film in load_films_from_dbpedia():
-    try:
-        agora.fountain.add_seed(unicode(film), 'dbpedia-owl:Film')
-    except Exception:
-        pass
+    # Each film URI found in dbpedia is added to Agora as a seed
+    for film in load_films_from_dbpedia():
+        try:
+            agora.fountain.add_seed(unicode(film[0]), 'dbpedia-owl:Film')
+        except Exception:
+            pass
 
-scholar = Scholar(agora.planner, cache=cache)
+    scholar = Scholar(planner=agora.planner, cache=cache, base='store', path='fragments', redis_file='fragments.db',
+                      persist_mode=True, id='scholar_2')
 
-# Example queries
-# queries = ["""SELECT DISTINCT ?name WHERE { ?film a dbpedia-owl:Film .
-#                                                    ?film foaf:name ?name .
-#                                                    ?film dbpedia-owl:starring ?actor .
-#                                                    OPTIONAL {?actor dbp:birthName "Mary Cathleen Collins"@en }
-#                                                  }"""]
+    # Example queries
+    # queries = ["""SELECT DISTINCT ?name WHERE { ?film a dbpedia-owl:Film .
+    #                                                    ?film foaf:name ?name .
+    #                                                    ?film dbpedia-owl:starring ?actor .
+    #                                                    OPTIONAL {?actor dbp:birthName "Mary Cathleen Collins"@en }
+    #                                                  }"""]
 
-#
-# queries = ["""SELECT DISTINCT ?film WHERE { { ?film a dbpedia-owl:Film }
-#                                             MINUS
-#                                             { ?film foaf:name ?name }
-#                                            }"""]
+    #
+    # queries = ["""SELECT DISTINCT ?film WHERE { { ?film a dbpedia-owl:Film }
+    #                                             MINUS
+    #                                             { ?film foaf:name ?name }
+    #                                            }"""]
 
-# queries = ["""SELECT * WHERE { ?film foaf:name ?name .
-#                                ?film dbpedia-owl:starring ?actor
-#                              }"""]
+    # queries = ["""SELECT * WHERE { ?film foaf:name ?name .
+    #                                ?film dbpedia-owl:starring ?actor
+    #                              }"""]
 
-# queries = ["""SELECT * WHERE { ?actor dbp:birthName "Mary Cathleen Collins"@en }"""]
+    # queries = ["""SELECT * WHERE { ?actor dbp:birthName "Mary Cathleen Collins"@en }"""]
 
-# queries = ["""SELECT * WHERE {?film a dbpedia-owl:Film . ?film foaf:name ?name }"""]
+    # queries = ["""SELECT * WHERE {?film a dbpedia-owl:Film . ?film foaf:name ?name }"""]
 
-q1 = """SELECT * WHERE { ?film foaf:name ?name .
-                         ?film dbpedia-owl:starring ?actor .
-                         OPTIONAL {?actor dbp:birthName ?birth }
-                         FILTER (STR(?name)="2046")
-                        }"""
+    q1 = """SELECT * WHERE { ?film foaf:name ?name .
+                             ?film dbpedia-owl:starring ?actor .
+                             OPTIONAL {?actor dbp:birthName ?birth }
+                             FILTER (STR(?name)="2046")
+                            }"""
 
-q2 = """SELECT * WHERE { ?film foaf:name ?name .
-                         ?film dbpedia-owl:starring [ dbp:birthName ?birth ]
-                         FILTER (isLITERAL(?name))
-                        }"""
+    q2 = """SELECT * WHERE { ?film foaf:name ?name .
+                             ?film dbpedia-owl:starring [ dbp:birthName ?birth ]
+                             FILTER (isLITERAL(?name))
+                            }"""
 
-elapsed = []
+    elapsed = []
 
-for query in [q2]:
-    pre = datetime.now()
-# Ask agora for results of the given query,
-# evaluating candidate results for each fragment triple collected (chunk_size=1)
-# -> Removing chunk_size argument forces to wait until all relevant triples are collected
-    n = 0
-    for row in agora.query(query, collector=scholar):
-        print '[', (datetime.now() - pre).total_seconds(), '] solution:',
-        for label in row.labels:
-            if row[label] is not None:
-                print label + '=' + (row[label]).toPython(),
-        print
-        n += 1
-    print n, 'solutions'
-    post = datetime.now()
-    elapsed.append((post - pre).total_seconds())
+    for query in [q2]:
+        pre = datetime.now()
+        # Ask agora for results of the given query,
+        # evaluating candidate results for each fragment triple collected (chunk_size=1)
+        # -> Removing chunk_size argument forces to wait until all relevant triples are collected
+        n = 0
+        for row in agora.query(query, collector=scholar):
+            print '[', (datetime.now() - pre).total_seconds(), '] solution:',
+            for label in row.labels:
+                if row[label] is not None:
+                    print label + '=' + (row[label]).toPython(),
+            print
+            n += 1
+        print n, 'solutions'
+        post = datetime.now()
+        elapsed.append((post - pre).total_seconds())
 
-print elapsed
-
-
-scholar.shutdown(wait=False)
+    print elapsed
+except (KeyboardInterrupt, SystemExit):
+    pass
+finally:
+    Agora.close()

@@ -100,7 +100,7 @@ class AgoraGraph(ConjunctiveGraph):
         tps = set([])
         for s, p, o in bgp:
             s_elm = tp_part(s)
-            if p == RDF.type:
+            if p == RDF.type and isinstance(o, URIRef):
                 o_elm = self.qname(o)
                 p_elm = 'a'
             else:
