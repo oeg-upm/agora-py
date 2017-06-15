@@ -69,8 +69,8 @@ let scope = undefined;
 
                 $locationProvider.html5Mode(true);
             }])
-        .controller('SPARQLController', ['$scope', '$log', '$http', '$timeout', '$q',
-            function ($scope, $log, $http, $timeout, $q) {
+        .controller('SPARQLController', ['$scope', '$log', '$http', '$timeout', '$q', '$location',
+            function ($scope, $log, $http, $timeout, $q, $location) {
                 // resize();
                 scope = $scope;
                 $scope.solutions = undefined;
@@ -86,7 +86,7 @@ let scope = undefined;
                 $scope.onFragmentRefresh = false;
                 $scope.ntriples = 0;
 
-                $scope.refreshSolutions = function() {
+                $scope.refreshSolutions = function () {
                     if (!$scope.onSolutionsRefresh) {
                         $scope.onSolutionsRefresh = true;
                         $scope.solutionsRefreshTimer = $timeout(function () {
@@ -97,7 +97,7 @@ let scope = undefined;
                     }
                 };
 
-                $scope.refreshFragment = function() {
+                $scope.refreshFragment = function () {
                     if (!$scope.onFragmentRefresh) {
                         $scope.onFragmentRefresh = true;
                         $scope.fragmentRefreshTimer = $timeout(function () {
@@ -108,7 +108,7 @@ let scope = undefined;
                     }
                 };
 
-                $scope.isURI = function(t) {
+                $scope.isURI = function (t) {
                     return t[0] == '<';
                 };
 
@@ -117,8 +117,16 @@ let scope = undefined;
                     $scope.results = [];
                     $scope.vars = [];
 
+                    let qObj = $location.search();
+                    let qArgs = '';
+                    for (let k in qObj) {
+                        if (qObj.hasOwnProperty(k)) {
+                           qArgs += '&' + k + '=' + qObj[k];
+                        }
+                    }
+
                     oboe({
-                        url: 'http://localhost:5000/sparql?query=' + encodeURIComponent($scope.query),
+                        url: 'http://localhost:5000/sparql?query=' + encodeURIComponent($scope.query) + qArgs,
                         headers: {
                             'Accept': 'application/sparql-results+json'
                         }
@@ -183,10 +191,18 @@ let scope = undefined;
                         $scope.refreshFragment();
                     }
 
+                    let qObj = $location.search();
+                    let qArgs = '';
+                    for (let k in qObj) {
+                        if (qObj.hasOwnProperty(k)) {
+                           qArgs += '&' + k + '=' + qObj[k];
+                        }
+                    }
+
                     let lastLoaded = 0;
                     let preFill = '';
                     $http({
-                        url: 'http://localhost:5000/fragment?query=' + encodeURIComponent($scope.query),
+                        url: 'http://localhost:5000/fragment?query=' + encodeURIComponent($scope.query) + qArgs,
                         headers: {'Accept': 'application/agora-quad-min'},
                         eventHandlers: {
                             progress: function (event) {
