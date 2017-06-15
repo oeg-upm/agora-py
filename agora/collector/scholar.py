@@ -26,10 +26,13 @@ from Queue import Empty, Full
 from StringIO import StringIO
 from datetime import datetime, timedelta
 from multiprocessing import Queue
-from threading import Thread, Event, Lock
+from threading import Event, Lock, Thread
 
 import networkx as nx
 import redis
+from agora.engine.utils.kv import get_kv
+
+from agora.engine.utils.graph import get_triple_store
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
 from rdflib import ConjunctiveGraph, Graph
@@ -41,13 +44,10 @@ from rdflib.plugins.sparql.sparql import QueryContext
 from shortuuid import uuid
 
 from agora.collector import Collector, triplify
-from agora.collector.cache import RedisCache
-from agora.collector.execution import FilterTree
-from agora.engine.plan import AbstractPlanner
+from agora.collector.execution import FilterTree, StopException
 from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
-from agora.engine.utils.graph import get_triple_store
-from agora.engine.utils.kv import get_kv
+from agora.engine.utils import stopped, Singleton
 from agora.graph import extract_tps_from_plan, extract_seed_types_from_plan
 
 __author__ = 'Fernando Serena'
@@ -75,9 +75,7 @@ def _remove_tp_filters(tp, filter_mapping={}, prefixes=None):
             elm = v
         return elm
 
-    # g = Graph()
     s, p, o = tp
-    # s, p, o = TP.from_string(tp, prefixes=prefixes, graph=g)
     if isinstance(s, URIRef):
         s = __create_var(s)
     if not isinstance(o, Variable):
@@ -142,6 +140,7 @@ class Fragment(object):
         self.__plan_event = Event()
         self.__plan_event.clear()
         self.__updated = False
+        self.__aborted = False
         self.__tp_map = {}
         self.__seed_types = {}
         self.__observers = set([])
@@ -169,29 +168,29 @@ class Fragment(object):
         return frozenset(self.__seed_types)
 
     @property
-    def get_seed_digests(self):
+    def seed_digests(self):
         return self.__seed_digests
 
     @property
     def updated(self):
-        with self.lock:
-            self.__updated = False if self.kv.get('{}:updated'.format(self.key)) is None else True
-            return self.__updated
+        #     with self.lock:
+        self.__updated = False if self.kv.get('{}:updated'.format(self.key)) is None else True
+        return self.__updated
 
     @property
     def updated_ts(self):
-        with self.lock:
-            upd_ts = self.kv.get('{}:updated'.format(self.key)) or 0
-            upd_dt = datetime.utcfromtimestamp(upd_ts)
-            return upd_dt
+        # with self.lock:
+        upd_ts = self.kv.get('{}:updated'.format(self.key)) or 0
+        upd_dt = datetime.utcfromtimestamp(upd_ts)
+        return upd_dt
 
     @property
     def newcomer(self):
-        with self.lock:
-            return self.kv.get('{}:stored'.format(self.key)) is None
+        # with self.lock:
+        return self.kv.get('{}:stored'.format(self.key)) is None
 
     def updated_for(self, ttl):
-        ttl = int(min(10000000, ttl))  # sys.maxint don't work for expire values!
+        ttl = int(min(10000000, ttl))
         ttl = int(max(ttl, 1))
         self.__updated = ttl > 0
         updated_key = '{}:updated'.format(self.key)
@@ -207,13 +206,17 @@ class Fragment(object):
 
     @property
     def collecting(self):
-        with self.lock:
-            return False if self.kv.get('{}:collecting'.format(self.key)) is None else True
+        # with self.lock:
+        return False if self.kv.get('{}:collecting'.format(self.key)) is None else True
+
+    @property
+    def aborted(self):
+        return self.__aborted
 
     @property
     def stored(self):
-        with self.lock:
-            return False if self.kv.get('{}:stored'.format(self.key)) is None else True
+        # with self.lock:
+        return False if self.kv.get('{}:stored'.format(self.key)) is None else True
 
     @collecting.setter
     def collecting(self, state):
@@ -238,6 +241,7 @@ class Fragment(object):
 
             return fragment
         except Exception:
+            traceback.print_exc()
             with kv.pipeline() as pipe:
                 for fragment_key in kv.keys('{}*{}*'.format(fragments_key, fid)):
                     pipe.delete(fragment_key)
@@ -273,14 +277,17 @@ class Fragment(object):
                 for c, s, p, o in self.stream.get(until):
                     yield self.__tp_map[c], s, p, o
 
-                while not self.__updated or not listen_queue.empty():
+                while not self.__aborted and (not self.__updated or not listen_queue.empty()):
                     try:
                         c, s, p, o = listen_queue.get(timeout=0.1)
                         yield self.__tp_map[c], s, p, o
                     except Empty:
                         pass
+                    except KeyboardInterrupt:
+                        stopped.set()
                     except Exception:
                         traceback.print_exc()
+                        break
                 listen_queue.close()
             finally:
                 self.__observers.remove(listen)
@@ -296,7 +303,9 @@ class Fragment(object):
         # type: (Graph) -> None
         self.__plan = p
         with self.kv.pipeline() as pipe:
-            pipe.set('{}:plan'.format(self.key), p.serialize(format='turtle'))
+            g = Graph()
+            plan_str = p.skolemize(g).serialize(format='turtle')
+            pipe.set('{}:plan'.format(self.key), plan_str)
             pipe.execute()
         self.__tp_map = extract_tps_from_plan(self.__plan)
         self.__seed_types = extract_seed_types_from_plan(self.__plan)
@@ -323,26 +332,40 @@ class Fragment(object):
         back_id = uuid()
         n_triples = 0
         pre_time = datetime.utcnow()
-        for c, s, p, o in collect_dict['generator']:
-            tp = self.__tp_map[str(c.node)]
-            self.stream.put(str(c.node), (s, p, o))
-            self.triples.get_context(str((back_id, tp))).add((s, p, o))
-            self.__notify((str(c.node), s, p, o))
-            n_triples += 1
-        with self.lock:  # Replace graph store and update ttl
-            for tp in self.__tp_map.values():
-                self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
-                self.triples.get_context(str((self.fid, tp))).__iadd__(self.triples.get_context(str((back_id, tp))))
-                self.triples.remove_context(self.triples.get_context(str((back_id, tp))))
-            actual_ttl = collect_dict.get('ttl')()
-            if not n_triples:
-                actual_ttl = 0
-            elapsed = (datetime.utcnow() - pre_time).total_seconds()
-            fragment_ttl = max(actual_ttl, elapsed)
-            self.updated_for(fragment_ttl)
-            self.collecting = False
+        self.__aborted = False
+        try:
+            for c, s, p, o in collect_dict['generator']:
+                tp = self.__tp_map[str(c.node)]
+                self.stream.put(str(c.node), (s, p, o))
+                self.triples.get_context(str((back_id, tp))).add((s, p, o))
+                self.__notify((str(c.node), s, p, o))
+                n_triples += 1
+        except StopException:
+            self.__aborted = True
 
-        log.info('Finished fragment collection: {} ({} triples), in {}s'.format(self.fid, n_triples, elapsed))
+        try:
+            with self.lock:
+                if not self.aborted:
+                    # Replace graph store and update ttl
+                    for tp in self.__tp_map.values():
+                        self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
+                        self.triples.get_context(str((self.fid, tp))).__iadd__(
+                            self.triples.get_context(str((back_id, tp))))
+                        self.triples.remove_context(self.triples.get_context(str((back_id, tp))))
+                    actual_ttl = collect_dict.get('ttl')()
+                    if not n_triples and actual_ttl >= 10000000:
+                        actual_ttl = 0
+                    elapsed = (datetime.utcnow() - pre_time).total_seconds()
+                    fragment_ttl = max(actual_ttl, elapsed)
+                    self.updated_for(fragment_ttl)
+                    log.info(
+                        'Finished fragment collection: {} ({} triples), in {}s'.format(self.fid, n_triples, elapsed))
+                else:
+                    self.remove()
+        except Exception, e:
+            traceback.print_exc()
+        finally:
+            self.collecting = False
 
     def remove(self):
         # type: () -> None
@@ -375,17 +398,107 @@ class Fragment(object):
 
 
 class FragmentIndex(object):
-    def __init__(self, planner, key_prefix='', kv=None, triples=None):
-        # type: (AbstractPlanner, str, redis.StrictRedis) -> None
+    __metaclass__ = Singleton
+    instances = {}
+    # i_lock = Lock()
+    daemon_event = Event()
+    daemon_event.clear()
+    daemon_th = None
+
+    def __init__(self, id='', **kwargs):
+        # type: (any, str) -> FragmentIndex
         self.__orphaned = {}
-        self.__key_prefix = key_prefix
-        self.__fragments_key = '{}:fragments'.format(key_prefix)
-        self.triples = triples if triples is not None else get_triple_store()
-        self.kv = kv if kv is not None else get_kv(persist_mode=True, redis_file='fragments.db')
-        self.__planner = planner
+        self.__key_prefix = id
+        self.__fragments_key = '{}:fragments'.format(id)
         self.lock = Lock()
         # Load fragments from kv
         self.__fragments = dict(self.__load_fragments())
+        self.__id = id
+
+    def __new__(cls, id='', force_seed=None, **kwargs):
+        index = super(FragmentIndex, cls).__new__(cls)
+        planner = kwargs.get('planner', None)
+        index.planner = planner
+        loader = kwargs.get('loader', None)
+        index.loader = loader
+        cache = kwargs.get('cache', None)
+        index.cache = cache
+        index.force_seed = force_seed
+        triples = get_triple_store(**kwargs)
+        kv = get_kv(**kwargs)
+        index.triples = triples
+        index.kv = kv
+
+        if FragmentIndex.daemon_th is None:
+            FragmentIndex.daemon_th = Thread(target=FragmentIndex._daemon)
+            FragmentIndex.daemon_th.start()
+
+        return index
+
+    def notify(self):
+        FragmentIndex.daemon_event.set()
+
+    @property
+    def id(self):
+        return self.__id
+
+    @property
+    def kv(self):
+        return self.__kv
+
+    @kv.setter
+    def kv(self, k):
+        self.__kv = k
+
+    @property
+    def planner(self):
+        return self.__planner
+
+    @planner.setter
+    def planner(self, p):
+        self.__planner = p
+
+    @property
+    def cache(self):
+        return self.__cache
+
+    @cache.setter
+    def cache(self, c):
+        self.__cache = c
+
+    @property
+    def triples(self):
+        return self.__triples
+
+    @triples.setter
+    def triples(self, t):
+        self.__triples = t
+
+    @property
+    def loader(self):
+        return self.__loader
+
+    @loader.setter
+    def loader(self, l):
+        self.__loader = l
+
+    @property
+    def force_seed(self):
+        return self.__force_seed
+
+    @force_seed.setter
+    def force_seed(self, s):
+        self.__force_seed = s
+
+    def seed_type_digest(self, ty):
+        if not self.force_seed:
+            return self.planner.fountain.get_seed_type_digest(ty)
+        else:
+            m = hashlib.md5()
+            for seed in sorted(self.force_seed[ty]):
+                m.update(seed)
+            current_digest = m.digest().encode('base64').strip()
+            return current_digest
 
     def __load_fragments(self):
         fids = self.kv.smembers(self.__fragments_key)
@@ -393,7 +506,7 @@ class FragmentIndex(object):
 
         for fragment_id in fids:
             fragment = Fragment.load(self.kv, self.triples, self.__fragments_key, fragment_id,
-                                     prefixes=self.__planner.fountain.prefixes)
+                                     prefixes=self.planner.fountain.prefixes)
 
             if fragment_id in orph_fids:
                 self.kv.srem(self.__fragments_key, fragment_id)
@@ -403,11 +516,12 @@ class FragmentIndex(object):
                 continue
 
             if fragment is not None:
-                # All those fragments that were not fully collected are marked here to be orphaned
-                if not fragment.updated and not fragment.collecting:
-                    self.kv.set('{}:stored'.format(fragment.key), False)
-                else:
-                    yield (fragment_id, fragment)
+                with fragment.lock:
+                    # All those fragments that were not fully collected are marked here to be orphaned
+                    if not fragment.updated and not fragment.collecting:
+                        self.kv.set('{}:stored'.format(fragment.key), False)
+                    else:
+                        yield (fragment_id, fragment)
 
     def get(self, agp, general=False, filters=None):
         # type: (AGP, bool) -> dict
@@ -431,8 +545,6 @@ class FragmentIndex(object):
 
             if mapping is not None:
                 return {'fragment': fragment, 'vars': mapping, 'filters': filter_mapping}
-
-        return None
 
     @property
     def fragments(self):
@@ -476,74 +588,117 @@ class FragmentIndex(object):
                 fragment.remove()
                 del self.__fragments[fid]
 
-
-class Scholar(Collector):
-    def __init__(self, planner, cache=None, loader=None, kv=None):
-        # type: (AbstractPlanner, RedisCache, object) -> None
-        super(Scholar, self).__init__(planner, cache)
-        # Scholars require cache
-        self.loader = loader
-        persist_mode = False
-        triples = None
-        if cache is not None:
-            # kv = cache.r
-            persist_mode = cache.persist_mode
-        if persist_mode:
-            triples = get_triple_store(persist_mode=persist_mode, base=cache.base_path, path='fragments')
-        if kv is None:
-            kv = get_kv(persist_mode=persist_mode, redis_file=cache.base_path + '/fragments/fragments.db')
-        self.__index = FragmentIndex(planner, key_prefix='scholar', kv=kv, triples=triples)
-        self.__daemon_event = Event()
-        self.__daemon_event.clear()
-        self.__enabled = True
-        self.__daemon = Thread(target=self._daemon)
-        self.__daemon.daemon = True
-        self.__daemon.start()
-
-    def get(self, agp, filters=None):
-        return self.__index.get(agp, filters=filters)
-
-    def _daemon(self):
+    @staticmethod
+    def _daemon():
         futures = {}
-        while self.__enabled:
-            with self.__index.lock:
-                for fragment in self.__index.fragments.values():
-                    if not fragment.updated and not fragment.collecting:
-                        if not fragment.newcomer:
-                            self.__index.remove(fragment.fid)
-                        else:
-                            collector = Collector(self.planner, self.cache)
-                            collector.loader = self.loader
-                            log.info('Starting fragment collection: {}'.format(fragment.fid))
-                            try:
-                                futures[fragment.fid] = tpool.submit(fragment.populate, collector)
-                            except RuntimeError as e:
-                                traceback.print_exc()
-                                log.warn(e.message)
-                    elif fragment.updated:
-                        for t, digest in fragment.get_seed_digests.items():
-                            t_n3 = t.n3(fragment.agp.graph.namespace_manager)
-                            current_digest = self.planner.fountain.get_seed_type_digest(t_n3)
-                            if digest != current_digest:
-                                self.__index.remove(fragment.fid)
-                                break
+        while not stopped.is_set():
+            for index in FragmentIndex.instances.values():
+                try:
+                    with index.lock:
+                        for fid in index.fragments.keys()[:]:
+                            fragment = index.fragments[fid]
+                            with fragment.lock:
+                                if not fragment.updated and not fragment.collecting:
+                                    if not fragment.newcomer:
+                                        index.remove(fragment.fid)
+                                    else:
+                                        collector = Collector()
+                                        collector.planner = index.planner
+                                        collector.cache = index.cache
+                                        collector.loader = index.loader
+                                        collector.force_seed = index.force_seed
+                                        log.info('Starting fragment collection: {}'.format(fragment.fid))
+                                        try:
+                                            futures[fragment.fid] = tpool.submit(fragment.populate, collector)
+                                        except RuntimeError as e:
+                                            traceback.print_exc()
+                                            log.warn(e.message)
+                                elif fragment.updated and not index.force_seed:
+                                    for t, digest in fragment.seed_digests.items():
+                                        t_n3 = t.n3(fragment.agp.graph.namespace_manager)
+                                        current_digest = index.seed_type_digest(t_n3)
+                                        if digest != current_digest:
+                                            index.remove(fragment.fid)
+                                            break
 
-            if futures:
-                log.info('Waiting for: {} collections'.format(len(futures)))
-                wait(futures.values())
-                for fragment_id, future in futures.items():
-                    exception = future.exception()
-                    if exception is not None:
-                        log.warn(exception.message)
-                        with self.__index.lock:
-                            self.__index.remove(fragment_id)
+                    if futures:
+                        log.info('Waiting for: {} collections'.format(len(futures)))
+                        wait(futures.values())
+                        for fragment_id, future in futures.items():
+                            exception = future.exception()
+                            if exception is not None:
+                                log.warn(exception.message)
+                                with index.lock:
+                                    try:
+                                        index.remove(fragment_id)
+                                    except Exception, e:
+                                        traceback.print_exc()
+                                        break
 
-                futures.clear()
+                        futures.clear()
+                except AttributeError:
+                    pass
+
             try:
-                self.__daemon_event.wait(timeout=1)
-                self.__daemon_event.clear()
+                FragmentIndex.daemon_event.wait(timeout=1)
+                FragmentIndex.daemon_event.clear()
             except Exception:
                 pass
+
+
+def _map_tp(tp, vars):
+    s, p, o = tp
+    return TP(vars.get(s, s), vars.get(p, p), vars.get(o, o))
+
+
+def _apply_filter(v, resource, filters, agp_filters):
+    if v in filters:
+        for var_f in filters[v]:
+            context = QueryContext()
+            context[v] = resource
+            passing = var_f.expr.eval(context) if hasattr(var_f.expr, 'eval') else bool(
+                resource.toPython())
+            if not passing:
+                return True
+    elif v in agp_filters:
+        return resource != agp_filters.get(v)
+    return False
+
+
+class Scholar(Collector):
+    def __init__(self, id='', **kwargs):
+        # type: () -> Scholar
+        super(Scholar, self).__init__()
+        self.id = id
+
+    def __new__(cls, id='', force_seed=None, **kwargs):
+        scholar = super(Scholar, cls).__new__(cls)
+        index = FragmentIndex(force_seed=force_seed, id=id, **kwargs)
+        scholar.index = index
+        return scholar
+
+    @property
+    def index(self):
+        return self.__index
+
+    @index.setter
+    def index(self, i):
+        self.__index = i
+
+    @property
+    def planner(self):
+        return self.index.planner
+
+    @property
+    def force_seed(self):
+        return self.index.force_seed
+
+    @force_seed.setter
+    def force_seed(self, s):
+        self.index.force_seed = s
+
+    def get(self, agp, filters=None):
+        return self.index.get(agp, filters=filters)
 
     @staticmethod
     def __map(mapping, elm):
@@ -580,23 +735,6 @@ class Scholar(Collector):
                 mapped_plan.set((v_node, RDFS.label, Literal(mapped_term.n3())))
 
         return mapped_plan
-
-    def __map_tp(self, tp, vars):
-        s, p, o = tp
-        return TP(vars.get(s, s), vars.get(p, p), vars.get(o, o))
-
-    def __apply_filter(self, v, resource, filters, agp_filters):
-        if v in filters:
-            for var_f in filters[v]:
-                context = QueryContext()
-                context[v] = resource
-                passing = var_f.expr.eval(context) if hasattr(var_f.expr, 'eval') else bool(
-                    resource.toPython())
-                if not passing:
-                    return True
-        elif v in agp_filters:
-            return resource != agp_filters.get(v)
-        return False
 
     def __follow_filter(self, candidates, tp, s, o, trace=None, prev=None):
         def seek_join(tps, f):
@@ -644,7 +782,7 @@ class Scholar(Collector):
                     query = translateQuery(parse)
                     var_filters[v].append(query.algebra.p.p)
 
-            mapped_agp = [self.__map_tp(tp, m_vars) for tp in agp]
+            mapped_agp = [_map_tp(tp, m_vars) for tp in agp]
             for tp in mapped_agp:
                 ft.add_tp(tp)
                 if tp.s in filters or tp.s in m_filters:
@@ -666,16 +804,16 @@ class Scholar(Collector):
                             pass
 
         for c, s, p, o in generator:
-            tp = self.__map_tp(c, m_vars)
+            tp = _map_tp(c, m_vars)
 
             if not in_filter_path.get(tp.s, False):
                 yield tp, s, p, o
             else:
                 passing = True
-                if self.__apply_filter(tp.s, s, var_filters, m_filters):
+                if _apply_filter(tp.s, s, var_filters, m_filters):
                     ft.filter(s, None, tp.s)
                     passing = False
-                if self.__apply_filter(tp.o, o, var_filters, m_filters):
+                if _apply_filter(tp.o, o, var_filters, m_filters):
                     ft.filter(o, None, tp.o)
                     passing = False
 
@@ -710,27 +848,12 @@ class Scholar(Collector):
 
     def get_fragment_generator(self, agp, **kwargs):
         filters = kwargs.get('filters', {})
-        mapping = self.__index.get(agp, general=True, filters=filters)
+        mapping = self.index.get(agp, general=True, filters=filters)
         if not mapping:
             # Register fragment
-            fragment = self.__index.register(agp, filters=filters)
+            fragment = self.index.register(agp, filters=filters)
             mapping = {'fragment': fragment}
 
-        self.__daemon_event.set()
+        self.index.notify()
         return {'plan': self.mapped_plan(mapping), 'generator': self.mapped_gen(mapping, filters),
-                'prefixes': self.planner.fountain.prefixes.items()}
-
-    def __exit__(self, type, value, traceback):
-        self.shutdown()
-
-    def __enter__(self):
-        pass
-
-    def __del__(self):
-        self.shutdown()
-
-    def shutdown(self, wait=False):
-        self.__enabled = False
-        tpool.shutdown(wait)
-        if hasattr(self.cache, 'close'):
-            self.cache.close()
+                'prefixes': self.index.planner.fountain.prefixes.items()}
