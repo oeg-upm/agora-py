@@ -98,7 +98,11 @@ def build(agora, server=None, import_name=__name__, query_function=None):
         try:
             query = request.args.get('query')
             incremental = json.loads(request.args.get('incremental', 'true'))
-            gen = query_function(query, incremental=incremental)
+            kwargs = dict(request.args.items())
+            del kwargs['query']
+            if 'incremental' in kwargs:
+                del kwargs['incremental']
+            gen = query_function(query, incremental=incremental, **kwargs)
             return gen_results()
         except Exception, e:
             traceback.print_exc()

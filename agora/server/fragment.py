@@ -20,18 +20,17 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import logging
+import re
 import traceback
 from contextlib import closing
 
-import re
-from time import sleep
+from flask import request
 
 from agora import Agora
 from agora.collector import triplify
 from agora.engine.plan import AGP
 from agora.engine.plan.agp import TP
 from agora.server import Server, APIError, Client
-from flask import request
 
 __author__ = 'Fernando Serena'
 
@@ -39,7 +38,7 @@ log = logging.getLogger('agora.server.fragment')
 
 
 def build(agora, server=None, import_name=__name__, fragment_function=None):
-    # type: (Agora, Server, str, Callable, Callable) -> AgoraServer
+    # type: (Agora, Server, str, callable) -> Server
 
     if server is None:
         server = Server(import_name)
@@ -75,7 +74,9 @@ def build(agora, server=None, import_name=__name__, fragment_function=None):
         try:
             query = request.args.get('query', None)
             if query is not None:
-                fragment_dict = fragment_function(query=query)
+                kwargs = dict(request.args.items())
+                del kwargs['query']
+                fragment_dict = fragment_function(query=query, **kwargs)
             else:
                 tps_str = request.args.get('agp')
                 tps_match = re.search(r'\{(.*)\}', tps_str).groups(0)
@@ -101,6 +102,7 @@ class FragmentClient(Client):
         super(FragmentClient, self).__init__(host, port)
 
     def fragment(self, query):
+        # type: (str) -> iter
         quads_gen = self._get_request('fragment?query={}'.format(query), accept='application/agora-quad')
         with closing(quads_gen) as gen:
             for quad in gen:
@@ -109,6 +111,7 @@ class FragmentClient(Client):
                 yield TP.from_string(tp_str), s, p, o
 
     def agp_fragment(self, agp):
+        # type: (AGP) -> iter
         quads_gen = self._get_request('fragment?agp=%s' % agp, accept='application/agora-quad')
         with closing(quads_gen) as gen:
             for quad in gen:
