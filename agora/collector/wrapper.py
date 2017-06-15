@@ -92,11 +92,12 @@ class ResourceWrapper(object):
     def join(self, path):
         return urljoin(self.__base, path, allow_fragments=True)
 
-    def load(self, uri, format=None):
+    def load(self, uri, format=None, **kwargs):
         try:
             match, query = self.__match(uri)
-            f, kwargs = match
-            kwargs.update(query)
+            f, kwargs_ext = match
+            kwargs_ext.update(query)
+            kwargs.update(kwargs_ext)
             return f(**kwargs)
         except ValueError:
             return
