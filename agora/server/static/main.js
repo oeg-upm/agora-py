@@ -126,7 +126,7 @@ let scope = undefined;
                     }
 
                     oboe({
-                        url: 'http://localhost:5000/sparql?query=' + encodeURIComponent($scope.query) + qArgs,
+                        url: $location.absUrl() + 'sparql?query=' + encodeURIComponent($scope.query) + qArgs,
                         headers: {
                             'Accept': 'application/sparql-results+json'
                         }
@@ -202,7 +202,7 @@ let scope = undefined;
                     let lastLoaded = 0;
                     let preFill = '';
                     $http({
-                        url: 'http://localhost:5000/fragment?query=' + encodeURIComponent($scope.query) + qArgs,
+                        url: $location.absUrl() + 'fragment?query=' + encodeURIComponent($scope.query) + qArgs,
                         headers: {'Accept': 'application/agora-quad-min'},
                         eventHandlers: {
                             progress: function (event) {
