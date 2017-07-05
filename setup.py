@@ -42,6 +42,7 @@ setup(
     install_requires=['requests', 'redislite', 'flask', 'shortuuid', 'Flask-Negotiate', 'redis', 'hiredis',
                       'rdflib==4.2.1', 'networkx', 'futures', 'rfc3987', 'python-dateutil'],
     classifiers=[],
+    include_package_data=True,
     package_dir={'agora': 'agora'},
     package_data={'agora': ['metadata.json']},
 )

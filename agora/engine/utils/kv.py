@@ -77,4 +77,7 @@ def get_kv(persist_mode=False, redis_host='localhost', redis_port=6379, redis_db
 def close():
     with kv_lock:
         for r in kvs.values():
-            r.shutdown()
+            try:
+                r.shutdown()
+            except Exception:
+                pass

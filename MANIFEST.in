@@ -1,0 +1,2 @@
+recursive-include agora/server/templates *
+recursive-include agora/server/static *
