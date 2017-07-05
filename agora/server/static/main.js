@@ -121,12 +121,19 @@ let scope = undefined;
                     let qArgs = '';
                     for (let k in qObj) {
                         if (qObj.hasOwnProperty(k)) {
-                           qArgs += '&' + k + '=' + qObj[k];
+                            qArgs += '&' + k + '=' + qObj[k];
                         }
                     }
 
+                    let baseUrl = $location.protocol() + '://' + $location.host();
+                    if ($location.port() !== undefined && $location.port() !== 80) {
+                        baseUrl += ':' + $location.port();
+                    }
+
+                    baseUrl += $location.path();
+
                     oboe({
-                        url: $location.absUrl() + 'sparql?query=' + encodeURIComponent($scope.query) + qArgs,
+                        url: baseUrl + 'sparql?query=' + encodeURIComponent($scope.query) + qArgs,
                         headers: {
                             'Accept': 'application/sparql-results+json'
                         }
@@ -195,14 +202,21 @@ let scope = undefined;
                     let qArgs = '';
                     for (let k in qObj) {
                         if (qObj.hasOwnProperty(k)) {
-                           qArgs += '&' + k + '=' + qObj[k];
+                            qArgs += '&' + k + '=' + qObj[k];
                         }
                     }
+
+                    let baseUrl = $location.protocol() + '://' + $location.host();
+                    if ($location.port() !== undefined && $location.port() !== 80) {
+                        baseUrl += ':' + $location.port();
+                    }
+
+                    baseUrl += $location.path();
 
                     let lastLoaded = 0;
                     let preFill = '';
                     $http({
-                        url: $location.absUrl() + 'fragment?query=' + encodeURIComponent($scope.query) + qArgs,
+                        url: baseUrl + 'fragment?query=' + encodeURIComponent($scope.query) + qArgs,
                         headers: {'Accept': 'application/agora-quad-min'},
                         eventHandlers: {
                             progress: function (event) {
