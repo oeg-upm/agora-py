@@ -92,7 +92,7 @@ class PlanGraph(nx.DiGraph):
         for node in node_patterns:
             spaces = set([])
             patterns = set([])
-            check_l = list(plan.objects((node, AGORA.checkType)))
+            check_l = list(plan.objects(node, AGORA.checkType))
             check = check_l.pop().toPython() if check_l else False
             for tp in node_patterns[node]:
                 tp_wrapper = ss.patterns[tp]
