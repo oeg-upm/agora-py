@@ -2,39 +2,6 @@
  * Created by fserena on 28/11/16.
  */
 
-function createNode(rdf, elm) {
-    if (isLiteral(elm)) {
-        let value;
-        let language = null;
-        let datatype = null;
-        if (elm.indexOf("^^") > 0) {
-            let parts = elm.split('^^');
-            value = parts[0].substring(1, parts[0].length - 1);
-            datatype = parts[1].substring(1, parts[1].length - 1)
-        } else {
-            let parts = elm.split('@');
-            value = parts[0];
-            if (value[0] === '"') {
-                value = value.substring(1, value.length - 1)
-            }
-            language = parts[1];
-        }
-        return rdf.createLiteral(value, language, datatype);
-    } else if (isURI(elm)) {
-        return rdf.createNamedNode(elm.substring(1, elm.length - 1));
-    } else {
-        let fakeURI = 'http://agora.org/fake/' + elm;
-        return rdf.createNamedNode(fakeURI);
-    }
-}
-
-function isLiteral(elm) {
-    return elm[0] != '<' && elm[0] != '_'
-}
-function isURI(elm) {
-    return elm[0] == '<'
-}
-
 // function resize()
 // {
 //     let heights = window.innerHeight;
@@ -85,6 +52,9 @@ let scope = undefined;
                 $scope.onSolutionsRefresh = false;
                 $scope.onFragmentRefresh = false;
                 $scope.ntriples = 0;
+                $scope.queryRunning = false;
+                $scope.fragRunning = false;
+                $scope.onError = false;
 
                 $scope.refreshSolutions = function () {
                     if (!$scope.onSolutionsRefresh) {
@@ -114,6 +84,7 @@ let scope = undefined;
 
                 $scope.runQuery = function () {
                     $scope.solutions = false;
+                    $scope.queryRunning = true;
                     $scope.results = [];
                     $scope.vars = [];
 
@@ -152,9 +123,18 @@ let scope = undefined;
                             }
                         }
                     ).done(function () {
-                        if ($scope.solutionsRefreshTimer != undefined) {
-                            $scope.solutionsRefreshTimer.cancel();
+                        try {
+                            if ($scope.solutionsRefreshTimer !== undefined) {
+                                $scope.solutionsRefreshTimer.cancel();
+                            }
+                        } catch (e) {
                         }
+                        $scope.queryRunning = false;
+                        $scope.$apply();
+                    }).fail(function () {
+                        $scope.queryRunning = false;
+                        $scope.onError = true;
+                        $scope.$apply();
                     });
                 };
 
@@ -172,6 +152,7 @@ let scope = undefined;
                     $scope.predicateMap = {};
                     $scope.fragment = false;
                     $scope.ntriples = 0;
+                    $scope.fragRunning = true;
 
                     function parse_chunk(chunk) {
                         let quads = chunk.split('\n');
@@ -231,6 +212,10 @@ let scope = undefined;
                         },
                         timeout: $scope.canceller.promise
                     }).success(function (d) {
+                        $scope.fragRunning = false;
+                    }).error(function(d) {
+                        $scope.fragRunning = false;
+                        $scope.onError = true;
                     });
                 };
             }]);

@@ -2,9 +2,9 @@
     <h4 class="title">Query text</h4>
     <div style="width: 100%">
         <textarea id="query" type="text" class="form-control" placeholder="Query" ng-model="query" spellcheck="false"
-                  oninput="textAreaAdjust(this)"></textarea>
-        <button class="btn btn-default" type="button" ng-click="runQuery()" style="margin-top:5px">Run query</button>
-        <button class="btn btn-default" type="button" ng-click="getFragment()" style="margin-top:5px">Get fragment
+                  oninput="textAreaAdjust(this)" ng-class="{badinput:onError}" ng-focus="onError = false"></textarea>
+        <button class="btn btn-default" type="button" ng-click="runQuery()" ng-disabled="queryRunning" style="margin-top:5px">Run query</button>
+        <button class="btn btn-default" type="button" ng-click="getFragment()" ng-disabled="fragRunning" style="margin-top:5px">Get fragment
         </button>
     </div>
     {% raw %}

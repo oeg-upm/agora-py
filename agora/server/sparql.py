@@ -80,20 +80,26 @@ def build(agora, server=None, import_name=__name__, query_function=None):
     @server.get('/sparql', produce_types=('application/sparql-results+json', 'text/html'))
     def query():
         def gen_results():
-            yield '{\n'
             first = True
-            for row in gen:
+            try:
+                for row in gen:
+                    if first:
+                        yield '{\n'
+                        yield '  "head": %s,\n  "results": {\n    "bindings": [\n' % json.dumps(head(row))
+                        first = False
+                    else:
+                        yield ',\n'
+                    yield '      {}'.format(json.dumps(result(row)).encode('utf-8'))
                 if first:
-                    yield '  "head": %s,\n  "results": {\n    "bindings": [\n' % json.dumps(head(row))
                     first = False
+                    yield '{\n'
+                if not first:
+                    yield '\n    ]\n  }\n'
                 else:
-                    yield ',\n'
-                yield '      {}'.format(json.dumps(result(row)).encode('utf-8'))
-            if not first:
-                yield '\n    ]\n  }\n'
-            else:
-                yield '  "head": [],\n  "results": {\n    "bindings": []\n  }\n'
-            yield '}'
+                    yield '  "head": [],\n  "results": {\n    "bindings": []\n  }\n'
+                yield '}'
+            except Exception, e:
+                raise APIError(e.message)
 
         try:
             query = request.args.get('query')

@@ -155,7 +155,6 @@ class AgoraGraph(ConjunctiveGraph):
         result = super(AgoraGraph, self).query(query_object, processor='agora',
                                                result='agora', graph=self, **kwargs)
 
-        # collector = self.__collector
         return result
 
     def search_plan(self, query_object, **kwargs):

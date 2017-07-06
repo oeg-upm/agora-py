@@ -174,3 +174,7 @@
 #triples {
     padding-right: 6px;
 }
+
+.badinput {
+    border:1px solid #f00;
+}
