@@ -91,12 +91,10 @@ def build(agora, server=None, import_name=__name__, query_function=None):
                         yield ',\n'
                     yield '      {}'.format(json.dumps(result(row)).encode('utf-8'))
                 if first:
-                    first = False
                     yield '{\n'
-                if not first:
-                    yield '\n    ]\n  }\n'
-                else:
                     yield '  "head": [],\n  "results": {\n    "bindings": []\n  }\n'
+                else:
+                    yield '\n    ]\n  }\n'
                 yield '}'
             except Exception, e:
                 raise APIError(e.message)
