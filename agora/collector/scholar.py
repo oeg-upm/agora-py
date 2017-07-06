@@ -327,21 +327,27 @@ class Fragment(object):
     def populate(self, collector):
         self.collecting = True
         self.stream.clear()
-        collect_dict = collector.get_fragment_generator(self.agp, filters=self.filters)
-        self.plan = collect_dict['plan']
-        back_id = uuid()
-        n_triples = 0
-        pre_time = datetime.utcnow()
-        self.__aborted = False
         try:
-            for c, s, p, o in collect_dict['generator']:
-                tp = self.__tp_map[str(c.node)]
-                self.stream.put(str(c.node), (s, p, o))
-                self.triples.get_context(str((back_id, tp))).add((s, p, o))
-                self.__notify((str(c.node), s, p, o))
-                n_triples += 1
-        except StopException:
+            collect_dict = collector.get_fragment_generator(self.agp, filters=self.filters)
+            generator = collect_dict['generator']
+            self.plan = collect_dict['plan']
+            self.__aborted = False
+        except Exception:
+            self.__plan_event.set()
             self.__aborted = True
+        else:
+            back_id = uuid()
+            n_triples = 0
+            pre_time = datetime.utcnow()
+            try:
+                for c, s, p, o in generator:
+                    tp = self.__tp_map[str(c.node)]
+                    self.stream.put(str(c.node), (s, p, o))
+                    self.triples.get_context(str((back_id, tp))).add((s, p, o))
+                    self.__notify((str(c.node), s, p, o))
+                    n_triples += 1
+            except StopException:
+                self.__aborted = True
 
         try:
             with self.lock:
@@ -598,7 +604,9 @@ class FragmentIndex(object):
                         for fid in index.fragments.keys()[:]:
                             fragment = index.fragments[fid]
                             with fragment.lock:
-                                if not fragment.updated and not fragment.collecting:
+                                if fragment.aborted:
+                                    index.remove(fragment.fid)
+                                elif not fragment.updated and not fragment.collecting:
                                     if not fragment.newcomer:
                                         index.remove(fragment.fid)
                                     else:
@@ -714,27 +722,28 @@ class Scholar(Collector):
 
     def mapped_plan(self, mapping):
         source_plan = mapping['fragment'].plan
-        mapped_plan = Graph()
-        for prefix, uri in source_plan.namespaces():
-            mapped_plan.bind(prefix, uri)
-        mapped_plan.__iadd__(source_plan)
-        v_nodes = list(mapped_plan.subjects(RDF.type, AGORA.Variable))
-        for v_node in v_nodes:
-            v_source_label = list(mapped_plan.objects(v_node, RDFS.label)).pop()
-            mapped_term = self.__map(mapping, Variable(v_source_label))
-            if isinstance(mapped_term, Literal):
-                mapped_plan.set((v_node, RDF.type, AGORA.Literal))
-                mapped_plan.set((v_node, AGORA.value, Literal(mapped_term.n3())))
-                mapped_plan.remove((v_node, RDFS.label, None))
-            elif isinstance(mapped_term, URIRef):
-                mapped_plan.remove((v_node, None, None))
-                for s, p, _ in mapped_plan.triples((None, None, v_node)):
-                    mapped_plan.remove((s, p, v_node))
-                    mapped_plan.add((s, p, mapped_term))
-            else:
-                mapped_plan.set((v_node, RDFS.label, Literal(mapped_term.n3())))
+        if source_plan:
+            mapped_plan = Graph()
+            for prefix, uri in source_plan.namespaces():
+                mapped_plan.bind(prefix, uri)
+            mapped_plan.__iadd__(source_plan)
+            v_nodes = list(mapped_plan.subjects(RDF.type, AGORA.Variable))
+            for v_node in v_nodes:
+                v_source_label = list(mapped_plan.objects(v_node, RDFS.label)).pop()
+                mapped_term = self.__map(mapping, Variable(v_source_label))
+                if isinstance(mapped_term, Literal):
+                    mapped_plan.set((v_node, RDF.type, AGORA.Literal))
+                    mapped_plan.set((v_node, AGORA.value, Literal(mapped_term.n3())))
+                    mapped_plan.remove((v_node, RDFS.label, None))
+                elif isinstance(mapped_term, URIRef):
+                    mapped_plan.remove((v_node, None, None))
+                    for s, p, _ in mapped_plan.triples((None, None, v_node)):
+                        mapped_plan.remove((s, p, v_node))
+                        mapped_plan.add((s, p, mapped_term))
+                else:
+                    mapped_plan.set((v_node, RDFS.label, Literal(mapped_term.n3())))
 
-        return mapped_plan
+            return mapped_plan
 
     def __follow_filter(self, candidates, tp, s, o, trace=None, prev=None):
         def seek_join(tps, f):
@@ -855,5 +864,9 @@ class Scholar(Collector):
             mapping = {'fragment': fragment}
 
         self.index.notify()
-        return {'plan': self.mapped_plan(mapping), 'generator': self.mapped_gen(mapping, filters),
-                'prefixes': self.index.planner.fountain.prefixes.items()}
+        plan = self.mapped_plan(mapping)
+        if plan:
+            return {'plan': plan, 'generator': self.mapped_gen(mapping, filters),
+                    'prefixes': self.index.planner.fountain.prefixes.items()}
+        else:
+            raise TypeError('No plan for given agp: {}'.format(agp))
