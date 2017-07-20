@@ -48,6 +48,8 @@ def value_type(value):
     elif isinstance(value, BNode):
         return 'bnode'
     else:
+        if value.datatype is not None:
+            return 'typed-literal'
         return 'literal'
 
 
@@ -59,7 +61,7 @@ def result(row):
         if isinstance(value_p, datetime):
             value_p = str(value_p)
         res = {"type": type, "value": value_p}
-        if type == 'literal':
+        if 'literal' in type:
             if value.datatype:
                 res['datatype'] = value.datatype.toPython()
             if value.language:

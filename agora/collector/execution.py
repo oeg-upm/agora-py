@@ -931,7 +931,7 @@ class PlanExecutor(object):
                 self.__last_iteration_ts = dt.now()
             thread.join()
 
-            if self.__aborted:
+            if self.__aborted or not self.__completed:
                 log.info('Aborted plan execution!')
                 raise StopException('Aborted plan execution')
             else:

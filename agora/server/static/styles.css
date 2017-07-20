@@ -99,7 +99,7 @@
 }
 
 .vuri {
-    background-color: #439235;
+    background-color: #00885a;
 }
 
 .vliteral {
@@ -171,10 +171,37 @@
     padding-left: 0;
 }
 
+#mpanel {
+    padding-right: 0;
+}
+
 #triples {
     padding-right: 6px;
 }
 
 .badinput {
-    border:1px solid #f00;
+    border: 1px solid #d9534f;
+}
+
+#mapid {
+    height: 300px;
+}
+
+.yasqe .CodeMirror {
+    height: auto;
+}
+
+.stopBtn {
+    height: 18px ;
+    vertical-align: middle;
+    color: #d9534f;
+    cursor: pointer;
+}
+
+.stopBtn:hover {
+    color: #f05c57;
+}
+
+.valuri {
+    cursor: pointer;
 }

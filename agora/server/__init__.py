@@ -72,7 +72,7 @@ def handle_invalid_usage(error):
 
 
 class Server(Flask):
-    def __init__(self, import_name):
+    def __init__(self, import_name, **kwargs):
         base = os.path.dirname(os.path.realpath(__file__))
         t_folder = base + '/templates'
         s_folder = base + '/static'

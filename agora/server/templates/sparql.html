@@ -2,43 +2,64 @@
     <h4 class="title">Query text</h4>
     <div style="width: 100%">
         <textarea id="query" type="text" class="form-control" placeholder="Query" ng-model="query" spellcheck="false"
-                  oninput="textAreaAdjust(this)" ng-class="{badinput:onError}" ng-focus="onError = false"></textarea>
-        <button class="btn btn-default" type="button" ng-click="runQuery()" ng-disabled="queryRunning" style="margin-top:5px">Run query</button>
-        <button class="btn btn-default" type="button" ng-click="getFragment()" ng-disabled="fragRunning" style="margin-top:5px">Get fragment
+                  oninput="textAreaAdjust(this)" ng-class="{badinput:onError}"></textarea>
+        <button class="btn btn-default" type="button" ng-click="runQuery()" ng-disabled="queryRunning"
+                style="margin-top:5px">Run query
+        </button>
+        <button class="btn btn-default" type="button" ng-click="getFragment()" ng-disabled="fragRunning"
+                style="margin-top:5px">Get fragment
         </button>
     </div>
     {% raw %}
     <div class="container-fluid">
         <div id="results-row" class="row">
             <div id="spanel" ng-show="solutions != undefined" class="col-md-5">
-                <h4 class="title">Query results<span id="rbadge" class="badge">{{results.length}}</span></h4>
+                <h4 class="title">Query results<span id="rbadge" class="badge">{{results.length}}</span>
+                    <span ng-click="abortQuery()" ng-show="queryStoppable"
+                          class="glyphicon glyphicon-stop stopBtn"></span></h4>
                 <div id="solutions" class="scroll">
                     <div class="result" ng-repeat="r in results">
                         <table class="table">
                             <tr ng-if="r[v] != null" ng-repeat="v in vars">
-                                <td class="var" ng-class="{vuri: r[v].type == 'uri', vliteral: r[v].type == 'literal', vblank: r[v].type == 'blank'}">{{v}}</td>
-                                <td class="value">{{r[v].value}}</td>
+                                <td class="var"
+                                    ng-class="{vuri: r[v].type == 'uri', vliteral: r[v].type == 'literal', vblank: r[v].type == 'blank'}">
+                                    {{v}}
+                                </td>
+                                <td ng-click="openLink('<' + r[v].value + '>')" ng-class="{valuri: r[v].type == 'uri'}" class="value">{{r[v].value}}</td>
                             </tr>
                         </table>
                     </div>
                 </div>
             </div>
+            <div id="mpanel" ng-show="geoSolutions" class="col-md-7">
+                <h4 class="title">Map view</h4>
+                <div id="mapid"></div>
+            </div>
             <div id="fpanel" ng-show="fragment != undefined" class="col-md-7">
-                <h4 class="title">Fragment triples<span id="fbadge" class="badge">{{ntriples}}</span></h4>
+                <h4 class="title">Fragment triples<span id="fbadge" class="badge">{{ntriples}}</span>
+                    <span ng-click="abortFragment()" ng-show="fragStoppable"
+                          class="glyphicon glyphicon-stop stopBtn"></span></h4>
                 <div id="triples" class="scroll">
                     <div class="result triple" ng-repeat="t in triples">
                         <table class="table">
                             <tr>
                                 <td class="var" ng-class="{vuri: t[0][0] == '<', vblank: t[0][0] == '_'}">s</td>
-                                <td class="value tvalue">{{t[0]}}</td>
+                                <td ng-click="openLink(t[0])" ng-class="{valuri: t[0][0] == '<'}"
+                                    class="value tvalue">{{t[0]}}
+                                </td>
                             </tr>
                             <tr>
                                 <td class="var">p</td>
                                 <td class="value tvalue">{{t[1]}}</td>
                             </tr>
                             <tr>
-                                <td class="var" ng-class="{vuri: t[2][0] == '<', vliteral: t[2][0] != '<', vblank: t[2][0] == '_'}">o</td>
-                                <td class="value tvalue">{{t[2]}}</td>
+                                <td class="var"
+                                    ng-class="{vuri: t[2][0] == '<', vliteral: t[2][0] != '<', vblank: t[2][0] == '_'}">
+                                    o
+                                </td>
+                                <td ng-click="openLink(t[2])" ng-class="{valuri: t[2][0] == '<'}" class="value tvalue">
+                                    {{t[2]}}
+                                </td>
                             </tr>
                         </table>
                     </div>

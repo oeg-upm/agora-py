@@ -30,9 +30,6 @@ from threading import Event, Lock, Thread
 
 import networkx as nx
 import redis
-from agora.engine.utils.kv import get_kv
-
-from agora.engine.utils.graph import get_triple_store
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
 from rdflib import ConjunctiveGraph, Graph
@@ -48,6 +45,8 @@ from agora.collector.execution import FilterTree, StopException
 from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
 from agora.engine.utils import stopped, Singleton
+from agora.engine.utils.graph import get_triple_store
+from agora.engine.utils.kv import get_kv
 from agora.graph import extract_tps_from_plan, extract_seed_types_from_plan
 
 __author__ = 'Fernando Serena'
@@ -240,7 +239,7 @@ class Fragment(object):
                 fragment.filters[Variable(v)] = set(kv.smembers(var_filter_key))
 
             return fragment
-        except Exception:
+        except Exception, e:
             traceback.print_exc()
             with kv.pipeline() as pipe:
                 for fragment_key in kv.keys('{}*{}*'.format(fragments_key, fid)):
@@ -327,6 +326,10 @@ class Fragment(object):
     def populate(self, collector):
         self.collecting = True
         self.stream.clear()
+
+        completed = False
+        n_triples = 0
+
         try:
             collect_dict = collector.get_fragment_generator(self.agp, filters=self.filters)
             generator = collect_dict['generator']
@@ -337,21 +340,25 @@ class Fragment(object):
             self.__aborted = True
         else:
             back_id = uuid()
-            n_triples = 0
             pre_time = datetime.utcnow()
             try:
-                for c, s, p, o in generator:
+                while not completed:
+                    c, s, p, o = generator.next()
                     tp = self.__tp_map[str(c.node)]
                     self.stream.put(str(c.node), (s, p, o))
                     self.triples.get_context(str((back_id, tp))).add((s, p, o))
                     self.__notify((str(c.node), s, p, o))
                     n_triples += 1
+            except StopIteration:
+                completed = True
             except StopException:
+                self.__aborted = True
+            except Exception:
                 self.__aborted = True
 
         try:
             with self.lock:
-                if not self.aborted:
+                if not stopped.is_set() and completed and not self.aborted:
                     # Replace graph store and update ttl
                     for tp in self.__tp_map.values():
                         self.triples.remove_context(self.triples.get_context(str((self.fid, tp))))
@@ -598,6 +605,7 @@ class FragmentIndex(object):
     def _daemon():
         futures = {}
         while not stopped.is_set():
+            FragmentIndex.daemon_event.clear()
             for index in FragmentIndex.instances.values():
                 try:
                     with index.lock:
@@ -649,7 +657,6 @@ class FragmentIndex(object):
 
             try:
                 FragmentIndex.daemon_event.wait(timeout=1)
-                FragmentIndex.daemon_event.clear()
             except Exception:
                 pass
 
