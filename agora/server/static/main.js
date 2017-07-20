@@ -351,7 +351,7 @@ var yasqe = undefined;
                     $scope.requestAbortFragment = true;
                     $scope.canceller.resolve();
                     $scope.fragRunning = false;
-                    $scope.queryStoppable = false;
+                    $scope.fragStoppable = false;
                 };
 
                 $scope.getFragment = function () {
