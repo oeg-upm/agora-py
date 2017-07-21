@@ -14,8 +14,34 @@
 
 
 let scope = undefined;
-var mymap = undefined;
-var yasqe = undefined;
+let mymap = undefined;
+let yasqe = undefined;
+
+
+let geojsonMarkerOptions = {
+    radius: 8,
+    fillColor: "#509dc8",
+    color: "#000",
+    weight: 1,
+    opacity: 1,
+    fillOpacity: 0.8
+};
+
+let circlePoint = function (feature, latlng) {
+    return L.circleMarker(latlng, geojsonMarkerOptions);
+};
+
+let popUpName = function (feature, layer) {
+    // does this feature have a property named popupContent?
+    if (feature.properties) {
+        let message = "<div>";
+        Object.keys(feature.properties).map(function (key, index) {
+            message += "<strong>" + key + "</strong>: " + feature.properties[key] + "<br>";
+        });
+        message += '</div>';
+        layer.bindPopup(message);
+    }
+};
 
 (function () {
 
@@ -43,6 +69,7 @@ var yasqe = undefined;
                     id: 'mapbox.streets',
                     accessToken: 'pk.eyJ1IjoiZnNlcmVuYSIsImEiOiJjajU5aWUwdXYwOXFnMnF0Z3gxNzY3cHBrIn0.Ks47QtJAcy3ybvq-9NoD4w'
                 }).addTo(mymap);
+
                 scope = $scope;
                 $scope.solutions = undefined;
                 $scope.fragment = undefined;
@@ -60,7 +87,7 @@ var yasqe = undefined;
                 $scope.geoSolutions = false;
                 $scope.fragRunning = false;
                 $scope.onError = false;
-                $scope.layerGroup = L.featureGroup();
+                $scope.layerGroup = L.geoJSON();
                 $scope.layerGroup.addTo(mymap);
                 $scope.oboe = undefined;
                 $scope.requestAbortFragment = false;
@@ -198,13 +225,13 @@ var yasqe = undefined;
                 //And, to make sure we don't use the other property and class autocompleters, overwrite the default enabled completers
                 // YASQE.defaults.autocompleters = ['customClassCompleter', 'customPropertyCompleter', 'customPrefixesCompleter'];
                 YASQE.defaults.autocompleters = $.grep(YASQE.defaults.autocompleters, function (completer) {
-                    return completer != 'prefixes'
+                    return completer !== 'prefixes'
                 });
                 YASQE.defaults.autocompleters = $.grep(YASQE.defaults.autocompleters, function (completer) {
-                    return completer != 'classes'
+                    return completer !== 'classes'
                 });
                 YASQE.defaults.autocompleters = $.grep(YASQE.defaults.autocompleters, function (completer) {
-                    return completer != 'properties'
+                    return completer !== 'properties'
                 });
 
 
@@ -243,7 +270,7 @@ var yasqe = undefined;
                     return t[0] === '<';
                 };
 
-                $scope.openLink = function(link) {
+                $scope.openLink = function (link) {
                     if ($scope.isURI(link)) {
                         $window.open(link.replace('<', '').replace('>', ''), '_blank');
                     }
@@ -300,16 +327,40 @@ var yasqe = undefined;
                             $scope.results.push(r);
 
                             try {
-                                var geojson = Terraformer.WKT.parse(r.wkt.value);
-                                var lgeo = L.geoJSON({
-                                    "type": "Feature",
-                                    "properties": {},
-                                    "geometry": geojson
-                                });
+                                let geojson = Terraformer.WKT.parse(r.wkt.value);
+                                let lgeo = L.geoJSON({
+                                        "type": "Feature",
+                                        "properties": {},
+                                        "geometry": geojson
+                                    },
+                                    {
+                                        pointToLayer: circlePoint
+                                    });
 
                                 $scope.layerGroup.addLayer(lgeo);
                                 $scope.geoSolutions = true;
                             } catch (Exception) {
+                            }
+
+                            if (r.lat !== undefined && r.lon !== undefined) {
+                                let props = {};
+                                Object.keys(r).map(function (key, index) {
+                                    props[key] = r[key].value;
+                                });
+                                let lgeo = L.geoJSON({
+                                        type: "Feature",
+                                        properties: props,
+                                        geometry: {
+                                            "type": "Point",
+                                            "coordinates": [r.lon.value, r.lat.value]
+                                        }
+                                    },
+                                    {
+                                        pointToLayer: circlePoint,
+                                        onEachFeature: popUpName
+                                    });
+                                $scope.layerGroup.addLayer(lgeo);
+                                $scope.geoSolutions = true;
                             }
 
                             if ($scope.vars.length == 0) {
