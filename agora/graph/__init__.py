@@ -38,7 +38,7 @@ from agora.graph.evaluate import extract_bgps
 
 __author__ = 'Fernando Serena'
 
-log = logging.getLogger('agora.graph.processor')
+log = logging.getLogger('agora.graph')
 
 plugin.register('agora', rdflib.query.Processor, 'agora.graph.processor', 'FragmentProcessor')
 plugin.register('agora', rdflib.query.Result, 'agora.graph.processor', 'FragmentResult')
