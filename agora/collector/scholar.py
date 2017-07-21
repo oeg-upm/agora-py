@@ -373,7 +373,7 @@ class Fragment(object):
                     self.updated_for(fragment_ttl)
                     log.info(
                         'Finished fragment collection: {} ({} triples), in {}s'.format(self.fid, n_triples, elapsed))
-                else:
+                elif self.aborted:
                     self.remove()
         except Exception, e:
             traceback.print_exc()
@@ -535,6 +535,9 @@ class FragmentIndex(object):
                         self.kv.set('{}:stored'.format(fragment.key), False)
                     else:
                         yield (fragment_id, fragment)
+            else:
+                self.kv.srem(self.__fragments_key, fragment_id)
+                self.kv.srem('{}:orph'.format(self.__fragments_key), fragment_id)
 
     def get(self, agp, general=False, filters=None):
         # type: (AGP, bool) -> dict
