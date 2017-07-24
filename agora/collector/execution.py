@@ -656,21 +656,21 @@ class PlanExecutor(object):
                 threads = []
                 for s in next_seeds:
                     __check_stop()
-                    try:
-                        workers_queue.put_nowait(s)
-                        future = pool.submit(__follow_node, n, s, tree_graph, parent=parent)
-                        threads.append(future)
-                    except Queue.Full:
+                    # try:
+                    #     workers_queue.put_nowait(s)
+                    #     future = pool.submit(__follow_node, n, s, tree_graph, parent=parent)
+                    #     threads.append(future)
+                    # except Queue.Full:
                         # If all threads are busy...I'll do it myself
-                        __follow_node(n, s, tree_graph, parent=parent)
+                    __follow_node(n, s, tree_graph, parent=parent)
 
-                if len(threads) >= workers:
-                    wait(threads)
-                    [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
-                    threads = []
-
-                wait(threads)
-                [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                # if len(threads) >= workers:
+                #     wait(threads)
+                #     [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
+                #     threads = []
+                #
+                # wait(threads)
+                # [(workers_queue.get_nowait(), workers_queue.task_done()) for _ in threads]
                 next_seeds.clear()
             except (IndexError, KeyError):
                 traceback.print_exc()

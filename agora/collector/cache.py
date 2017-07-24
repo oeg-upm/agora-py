@@ -75,6 +75,9 @@ class RedisCache(object):
 
         self.__resources_ts = {}
 
+        for lock_key in self._r.keys('{}:l*'.format(self.__key_prefix)):
+            self._r.delete(lock_key)
+
         self.__enabled = True
         self.__purge_th = Thread(target=self.__purge)
         self.__purge_th.daemon = True
@@ -117,7 +120,7 @@ class RedisCache(object):
 
     def uri_lock(self, uri):
         with self.__lock:
-            key = 'l:' + uri
+            key = '{}:l:'.format(self.__key_prefix) + uri
             key = (key[:250]) if len(key) > 250 else key
             return Lock(self._r, key)
 
