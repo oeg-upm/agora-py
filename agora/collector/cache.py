@@ -25,20 +25,21 @@ import logging
 import math
 import shutil
 import traceback
-from datetime import datetime as dt, timedelta as delta
-from threading import Thread, Lock
+from StringIO import StringIO
+from threading import Thread, Lock as TLock
 from time import sleep
 
 import shortuuid
-from concurrent.futures import ThreadPoolExecutor
-from rdflib import ConjunctiveGraph
-from rdflib.graph import Graph
-
 from agora.collector.execution import parse_rdf
 from agora.collector.http import http_get, extract_ttl
 from agora.engine.utils import stopped
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime as dt, timedelta as delta
+from rdflib import ConjunctiveGraph
+from rdflib.graph import Graph
+from redis.lock import Lock
 
 __author__ = 'Fernando Serena'
 
@@ -47,7 +48,7 @@ log = logging.getLogger('agora.collector.cache')
 tpool = ThreadPoolExecutor(max_workers=1)
 
 _caches = {}
-_lock = Lock()
+_lock = TLock()
 
 
 def get(**kwargs):
@@ -64,31 +65,15 @@ class RedisCache(object):
                  base='store', path='cache', redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None):
         self.__key_prefix = key_prefix
         self.__cache_key = '{}:cache'.format(key_prefix)
-        self.__locks = {}
-        self.__lock = Lock()
-        self.__uuids = {}
-        self.__uris = {}
         self.__persist_mode = persist_mode
         self.__min_cache_time = min_cache_time
         self.__force_cache_time = force_cache_time
         self.__base_path = base
-        self.__resource_path = path
-        self.__resource_cache = get_triple_store(persist_mode=persist_mode,
-                                                 base=base, path=path)
+        self.__resource_cache = get_triple_store()
         self._r = get_kv(persist_mode, redis_host, redis_port, redis_db, redis_file, base=base, path=path)
+        self.__lock = Lock(self._r, key_prefix)
 
         self.__resources_ts = {}
-
-        cached_uris = 0
-        for uuid_key in self._r.keys('{}:*uri'.format(key_prefix)):
-            uuid = uuid_key.split(':')[1]
-            uri = self._r.get(uuid_key)
-            if uri is not None:
-                self.__uuids[uri] = uuid
-                self.__uris[uuid] = uri
-                cached_uris += 1
-
-        log.info('Recovered {} cached resources'.format(cached_uris))
 
         self.__enabled = True
         self.__purge_th = Thread(target=self.__purge)
@@ -132,16 +117,18 @@ class RedisCache(object):
 
     def uri_lock(self, uri):
         with self.__lock:
-            if uri not in self.__locks:
-                self.__locks[uri] = Lock()
-            return self.__locks[uri]
+            key = 'l:' + uri
+            key = (key[:250]) if len(key) > 250 else key
+            return Lock(self._r, key)
 
     def __purge(self):
+        gids_key = '{}:gids'.format(self.__cache_key)
         while self.__enabled and not stopped.is_set():
             try:
+                gids = self._r.hkeys(gids_key)
                 obsolete = filter(
-                    lambda x: not self._r.exists('{}:cache:{}'.format(self.__key_prefix, self.__uuids[x])),
-                    self.__uuids.keys())
+                    lambda x: not self._r.exists('{}:{}'.format(self.__cache_key, self._r.hget(gids_key, x))),
+                    gids)
 
                 if obsolete:
                     with self._r.pipeline(transaction=True) as p:
@@ -149,16 +136,9 @@ class RedisCache(object):
                         log.debug('Removing {} resouces from cache...'.format(len(obsolete)))
                         for uri in obsolete:
                             with self.uri_lock(uri):
-                                uuid = self.__uuids[uri]
+                                uuid = self._r.hget(gids_key, uri)
                                 try:
-                                    g = self.__resource_cache.get_context(uri)
-                                    g.remove((None, None, None))
-                                    self.__resource_cache.remove_context(g)
-                                    p.delete('{}:{}:uri'.format(self.__key_prefix, uuid))
-                                    with self.__lock:
-                                        del self.__locks[uri]
-                                    del self.__uuids[uri]
-                                    del self.__uris[uuid]
+                                    self._r.hdel(gids_key, uri)
                                 except Exception:
                                     traceback.print_exc()
                                     log.error('Purging resource {}'.format(uri))
@@ -167,7 +147,7 @@ class RedisCache(object):
                 traceback.print_exc()
                 log.error(e.message)
                 self.__enabled = False
-            sleep(1)
+            sleep(10)
 
     def create(self, conjunctive=False, gid=None, loader=None, format=None):
         if conjunctive:
@@ -178,33 +158,27 @@ class RedisCache(object):
             p = self._r.pipeline(transaction=True)
             p.multi()
 
+            g = Graph(identifier=gid)
+
             with self.uri_lock(gid):
-                g = self.__resource_cache.get_context(gid)
-                if gid not in self.__uuids:
+                uuid = self._r.hget('{}:gids'.format(self.__cache_key), gid)
+                if not uuid:
                     uuid = shortuuid.uuid()
-                else:
-                    uuid = self.__uuids[gid]
+                    p.hset('{}:gids'.format(self.__cache_key), gid, uuid)
 
-                temp_key = '{}:{}'.format(self.__cache_key, uuid)
+                gid_key = '{}:{}'.format(self.__cache_key, uuid)
 
-                ttl_ts = self._r.get(temp_key)
+                ttl_ts = self._r.hget(gid_key, 'ttl')
                 if ttl_ts is not None:
-                    ttl = 0
-                    if ttl_ts is not None:
-                        ttl_dt = dt.utcfromtimestamp(int(ttl_ts))
-                        now = dt.utcnow()
-                        if ttl_dt > now:
-                            ttl = math.ceil((ttl_dt - dt.utcnow()).total_seconds())
+                    ttl_dt = dt.utcfromtimestamp(int(ttl_ts))
+                    now = dt.utcnow()
+                    if ttl_dt > now:
+                        ttl = math.ceil((ttl_dt - dt.utcnow()).total_seconds())
+                        source = self._r.hget(gid_key, 'data')
+                        g.parse(StringIO(source), format=format)
+                        return g, math.ceil(ttl)
 
-                    g_copy = Graph(identifier=gid)
-                    g_copy.__iadd__(g)
-                    return g_copy, math.ceil(ttl)
-
-                g.remove((None, None, None))
-                self.__resource_cache.remove_context(g)
-                g = self.__resource_cache.get_context(gid)
-
-                # log.debug('Caching {}'.format(gid))
+                log.debug('Caching {}'.format(gid))
                 response = loader(gid, format)
                 if response is None and loader != http_get:
                     response = http_get(gid, format)
@@ -215,26 +189,22 @@ class RedisCache(object):
                 ttl = self.__min_cache_time
                 source, headers = response
                 if not isinstance(source, Graph):
+                    data = source
                     parse_rdf(g, source, format, headers)
                 else:
                     if g != source:
+                        data = source.serialize(format='turtle')
                         g.__iadd__(source)
 
                 if not self.__force_cache_time:
                     ttl = extract_ttl(headers) or ttl
 
-                # Let's create a new one
-                p.set('{}:{}:uri'.format(self.__key_prefix, uuid), gid)
+                p.hset(gid_key, 'data', data)
                 ttl_ts = calendar.timegm((dt.utcnow() + delta(seconds=ttl)).timetuple())
-                p.set(temp_key, ttl_ts)
-                p.expire(temp_key, ttl)
+                p.hset(gid_key, 'ttl', ttl_ts)
+                p.expire(gid_key, ttl)
                 p.execute()
-                self.__uuids[gid] = uuid
-                self.__uris[uuid] = gid
-
-                g_copy = Graph(identifier=gid)
-                g_copy.__iadd__(g)
-                return g_copy, int(ttl)
+            return g, int(ttl)
 
     def release(self, g):
         if isinstance(g, ConjunctiveGraph):
@@ -243,7 +213,7 @@ class RedisCache(object):
                 tpool.submit(self.__clean, g.identifier.toPython())
             else:
                 g.remove((None, None, None))
-                g.close()
+                # g.close()
 
     def close(self):
         self.__enabled = False
