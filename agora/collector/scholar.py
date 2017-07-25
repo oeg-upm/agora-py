@@ -53,7 +53,7 @@ __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.collector.scholar')
 
-tpool = ThreadPoolExecutor(max_workers=4)
+tpool = ThreadPoolExecutor(max_workers=50)
 
 
 def _remove_tp_filters(tp, filter_mapping={}, prefixes=None):

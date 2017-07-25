@@ -42,3 +42,14 @@ def prepare_store_path(base, path):
         os.makedirs(base)
     if not os.path.exists('{}/{}'.format(base, path)):
         os.makedirs('{}/{}'.format(base, path))
+
+
+class Semaphore(object):
+    def __init__(self):
+        self.value = -1
+
+    def __enter__(self):
+        self.value = 0
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.value = 1

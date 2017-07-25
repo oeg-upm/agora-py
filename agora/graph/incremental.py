@@ -18,6 +18,8 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
+from Queue import Queue, Empty
+from threading import Thread
 
 import networkx as nx
 from rdflib import Variable
@@ -87,6 +89,10 @@ def __base_generator(agp, ctx, fragment):
     wire = agp.wire
     ignore_tps = [str(tp) for (tp, v) in tp_single_vars if len(wire.neighbors(v)) > 1]
     for tp, ss, _, so in fragment:
+        if ctx.stop is not None:
+            if ctx.stop.value > 0:
+                break
+
         if str(tp) in ignore_tps:
             continue
         kwargs = {}
@@ -122,12 +128,16 @@ def __joins(c, x):
 def common_descendants(graph, x, c, base):
     if base:
         return False
-    for dx in nx.descendants(graph, c):
-        for dc in nx.descendants(graph, x):
-            if dx.map == dc.map:
-                return True
-                # if graph.out_degree(dx) > 0:
-                #     return True
+    try:
+        for dx in nx.descendants(graph, c):
+            for dc in nx.descendants(graph, x):
+                if dx.map == dc.map:
+                    return True
+                    # if graph.out_degree(dx) > 0:
+                    #     return True
+    except Exception as e:
+        print e.message
+        raise e
     return False
 
 
@@ -135,28 +145,37 @@ def filter_successor(graph, c, x, base):
     return c.map != x.map and __joins(c, x) and not common_descendants(graph, c, x, base)
 
 
+def union(x, y):
+    r = ContextCollection()
+    for c in x:
+        r.add(c)
+    for c in y:
+        r.add(c)
+    return r
+
+
 def __eval_delta(c, graph, roots, variables, base=False):
     # type: (Context, nx.DiGraph) -> iter
-
-    def union(x, y):
-        r = ContextCollection()
-        for c in x:
-            r.add(c)
-        for c in y:
-            r.add(c)
-        return r
 
     solutions = ContextCollection()
 
     root_candidates = reduce(lambda x, y: union(x, set(graph.successors(y))), roots, set())
+    root_candidates = filter(lambda x: set(x.variables).symmetric_difference(c.variables), root_candidates)
     for root in root_candidates:
         if filter_successor(graph, c, root, base):
             inter = __exploit(root, c)
-            if inter in graph.nodes():
-                # This should not happen!!
+
+            if inter not in graph:
+                graph.add_node(inter)
+                graph.add_edge(root, inter)
+                graph.add_edge(c, inter)
+            else:
                 continue
-            graph.add_edge(root, inter)
-            graph.add_edge(c, inter)
+
+            if len(graph.nodes()) > 1000:
+                break
+
+            print 'DELTA ({}) {}'.format(len(inter.variables), inter)
             if len(inter.variables) == len(variables):
                 solutions.add(inter)
             else:
@@ -178,9 +197,18 @@ def __query_context(ctx, c):
     return q
 
 
+def __generate(data):
+    queue, agp, ctx, generator = data['queue'], data['agp'], data['context'], data['gen']
+    for c, tp in __base_generator(agp, ctx, generator):
+        queue.put((c, tp))
+
+    data['collecting'] = False
+
+
 def incremental_eval_bgp(ctx, bgp):
     # type: (QueryContext, iter) -> iter
     fragment_generator = ctx.graph.gen(bgp, filters=ctx.filters)
+    queue = Queue()
     if fragment_generator is not None:
         dgraph = nx.DiGraph()
         agp = ctx.graph.build_agp(bgp)
@@ -188,12 +216,44 @@ def incremental_eval_bgp(ctx, bgp):
         variables = set([v for v in agp.wire.nodes() if isinstance(v, Variable)])
         dgraph.add_nodes_from(variables)
 
-        for c, tp in __base_generator(agp, ctx, fragment_generator):
-            [dgraph.add_edge(v, c) for v in c.variables]
+        gen_data = {
+            'queue': queue,
+            'agp': agp,
+            'context': ctx,
+            'gen': fragment_generator,
+            'collecting': True
+        }
 
-            if len(c.variables) == len(variables):
-                yield __query_context(ctx, c).solution()
-            else:
-                if isinstance(tp.o, Variable) and isinstance(tp.s, Variable):
-                    for solution in __eval_delta(c, dgraph, c.variables, variables, base=True):
-                        yield __query_context(ctx, solution).solution()
+        gen_thread = Thread(target=__generate, args=(gen_data,))
+        gen_thread.start()
+
+        try:
+            while gen_data['collecting']:
+                if ctx.stop is not None:
+                    if ctx.stop.value > 0:
+                        raise StopIteration()
+                try:
+                    c, tp = queue.get(timeout=1.0)
+                    if len(dgraph.nodes()) > 1000:
+                        raise Exception()
+                    [dgraph.add_edge(v, c) for v in c.variables]
+
+                    print 'BASE ({}) {}'.format(len(c.variables), c)
+                    if len(c.variables) == len(variables):
+                        yield __query_context(ctx, c).solution()
+                    else:
+                        if isinstance(tp.o, Variable) and isinstance(tp.s, Variable):
+                            for solution in __eval_delta(c, dgraph, c.variables, variables, base=True):
+                                yield __query_context(ctx, solution).solution()
+                except Empty:
+                    pass
+
+            # for v in variables:
+            #     variable_succ = dgraph.successors(v)
+            #     for c in variable_succ:
+            #         for solution in __eval_delta(c, dgraph, c.variables, variables, base=True):
+            #             yield __query_context(ctx, solution).solution()
+        finally:
+            gen_thread.join()
+
+

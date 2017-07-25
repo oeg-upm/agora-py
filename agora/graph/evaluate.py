@@ -57,7 +57,8 @@ def collect_bgp_fragment(ctx, bgp):
     if gen is not None:
         try:
             while gen.next():
-                pass
+                if ctx.stop is not None and ctx.stop.value:
+                    break
         except StopIteration:
             pass
 
@@ -104,13 +105,19 @@ def __evalBGP(ctx, bgp):
 
 def evalBGP(ctx, bgp):
     # print 'evaluating BGP {}'.format(bgp)
+    yielded = []
 
     if isinstance(ctx, AgoraQueryContext) and ctx.incremental:
-        for x in incremental_eval_bgp(ctx, bgp):
-            yield x
-    else:
-        collect_bgp_fragment(ctx, bgp)
-        for x in __evalBGP(ctx, bgp):
+        try:
+            for x in incremental_eval_bgp(ctx, bgp):
+                yielded.append(x)
+                yield x
+        except Exception:
+            pass
+
+    collect_bgp_fragment(ctx, bgp)
+    for x in __evalBGP(ctx, bgp):
+        if x not in yielded:
             yield x
 
 
@@ -521,10 +528,11 @@ def evalConstructQuery(ctx, query):
 
 
 class AgoraQueryContext(QueryContext):
-    def __init__(self, graph=None, bindings=None, incremental=True, **kwargs):
+    def __init__(self, graph=None, bindings=None, incremental=True, stop=None, **kwargs):
         super(AgoraQueryContext, self).__init__(graph, bindings)
         self.incremental = incremental
         self.filters = {}
+        self.stop = stop
 
     def clone(self, bindings=None):
         r = AgoraQueryContext(
@@ -534,6 +542,7 @@ class AgoraQueryContext(QueryContext):
         r.bindings.update(bindings or self.bindings)
         r.graph = self.graph
         r.bnodes = self.bnodes
+        r.stop = self.stop
         return r
 
 
@@ -594,8 +603,6 @@ def extract_bgps(query, prefixes):
 
 def evalQuery(graph, query, initBindings, base=None, incremental=True, **kwargs):
     ctx = AgoraQueryContext(graph=graph, incremental=incremental, **kwargs)
-
-
 
     ctx.prologue = query.prologue
 

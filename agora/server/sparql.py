@@ -21,17 +21,19 @@
 import json
 import logging
 import traceback
+from Queue import Queue, Empty
 from datetime import datetime
-from time import sleep
+from threading import Thread, Semaphore
 
 from flask import redirect
 from flask import render_template
-
-from agora import Agora
-from agora.server import Server, APIError, Client
 from flask import request
 from rdflib import BNode
 from rdflib import URIRef
+
+from agora import Agora
+from agora.engine.utils import Semaphore
+from agora.server import Server, APIError, Client
 
 __author__ = 'Fernando Serena'
 
@@ -81,25 +83,40 @@ def build(agora, server=None, import_name=__name__, query_function=None):
 
     @server.get('/sparql', produce_types=('application/sparql-results+json', 'text/html'))
     def query():
-        def gen_results():
+        def gen_thread(status):
             first = True
             try:
                 for row in gen:
                     if first:
-                        yield '{\n'
-                        yield '  "head": %s,\n  "results": {\n    "bindings": [\n' % json.dumps(head(row))
+                        queue.put('{\n')
+                        queue.put('  "head": %s,\n  "results": {\n    "bindings": [\n' % json.dumps(head(row)))
                         first = False
                     else:
-                        yield ',\n'
-                    yield '      {}'.format(json.dumps(result(row)).encode('utf-8'))
+                        queue.put(',\n')
+                    queue.put('      {}'.format(json.dumps(result(row)).encode('utf-8')))
                 if first:
-                    yield '{\n'
-                    yield '  "head": [],\n  "results": {\n    "bindings": []\n  }\n'
+                    queue.put('{\n')
+                    queue.put('  "head": [],\n  "results": {\n    "bindings": []\n  }\n')
                 else:
-                    yield '\n    ]\n  }\n'
-                yield '}'
+                    queue.put('\n    ]\n  }\n')
+                queue.put('}')
             except Exception, e:
-                raise APIError(e.message)
+                exception = e
+
+            status['completed'] = True
+
+        def gen_queue(status):
+            with stop_event:
+                while not status['completed'] or not queue.empty():
+                    status['last'] = datetime.now()
+                    try:
+                        for chunk in queue.get(timeout=1.0):
+                            yield chunk
+                    except Empty:
+                        if not status['completed']:
+                            yield '\n'
+                        elif status['exception']:
+                            raise APIError(status['exception'].message)
 
         try:
             query = request.args.get('query')
@@ -108,8 +125,19 @@ def build(agora, server=None, import_name=__name__, query_function=None):
             del kwargs['query']
             if 'incremental' in kwargs:
                 del kwargs['incremental']
-            gen = query_function(query, incremental=incremental, **kwargs)
-            return gen_results()
+
+            stop_event = Semaphore()
+            gen = query_function(query, incremental=incremental, stop=stop_event, **kwargs)
+            queue = Queue()
+            request_status = {
+                'completed': False,
+                'exception': None
+            }
+            stream_th = Thread(target=gen_thread, args=(request_status,))
+            stream_th.daemon = False
+            stream_th.start()
+
+            return gen_queue(request_status)
         except Exception, e:
             traceback.print_exc()
             raise APIError(e.message)
