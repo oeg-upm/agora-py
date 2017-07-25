@@ -94,6 +94,7 @@ let popUpName = function (feature, layer) {
                 $scope.canceller = $q.defer();
                 $scope.queryStoppable = false;
                 $scope.fragStoppable = false;
+                $scope.latLons = [];
 
                 $scope.baseUrl = $location.protocol() + '://' + $location.host();
                 if ($location.port() !== undefined && $location.port() !== 80) {
@@ -291,6 +292,7 @@ let popUpName = function (feature, layer) {
                     $scope.queryStoppable = false;
                     $scope.queryRunning = true;
                     $scope.geoSolutions = false;
+                    $scope.latLons = [];
                     $scope.results = [];
                     $scope.vars = [];
                     $scope.onError = false;
@@ -343,24 +345,31 @@ let popUpName = function (feature, layer) {
                             }
 
                             if (r.lat !== undefined && r.lon !== undefined) {
-                                let props = {};
-                                Object.keys(r).map(function (key, index) {
-                                    props[key] = r[key].value;
-                                });
-                                let lgeo = L.geoJSON({
-                                        type: "Feature",
-                                        properties: props,
-                                        geometry: {
-                                            "type": "Point",
-                                            "coordinates": [r.lon.value, r.lat.value]
+                                let latLonStr = String(r.lat.value) + String(r.lon.value);
+
+                                if ($scope.latLons.indexOf(latLonStr) < 0) {
+                                    $scope.latLons.push(latLonStr);
+                                    let props = {};
+                                    Object.keys(r).map(function (key, index) {
+                                        if (key !== 'wkt') {
+                                            props[key] = r[key].value;
                                         }
-                                    },
-                                    {
-                                        pointToLayer: circlePoint,
-                                        onEachFeature: popUpName
                                     });
-                                $scope.layerGroup.addLayer(lgeo);
-                                $scope.geoSolutions = true;
+                                    let lgeo = L.geoJSON({
+                                            type: "Feature",
+                                            properties: props,
+                                            geometry: {
+                                                "type": "Point",
+                                                "coordinates": [r.lon.value, r.lat.value]
+                                            }
+                                        },
+                                        {
+                                            pointToLayer: circlePoint,
+                                            onEachFeature: popUpName
+                                        });
+                                    $scope.layerGroup.addLayer(lgeo);
+                                    $scope.geoSolutions = true;
+                                }
                             }
 
                             if ($scope.vars.length == 0) {
