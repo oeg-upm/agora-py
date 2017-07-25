@@ -136,7 +136,7 @@ def common_descendants(graph, x, c, base):
                     # if graph.out_degree(dx) > 0:
                     #     return True
     except Exception as e:
-        print e.message
+        # print e.message
         raise e
     return False
 
@@ -175,7 +175,7 @@ def __eval_delta(c, graph, roots, variables, base=False):
             if len(graph.nodes()) > 1000:
                 break
 
-            print 'DELTA ({}) {}'.format(len(inter.variables), inter)
+            # print 'DELTA ({}) {}'.format(len(inter.variables), inter)
             if len(inter.variables) == len(variables):
                 solutions.add(inter)
             else:
@@ -238,7 +238,7 @@ def incremental_eval_bgp(ctx, bgp):
                         raise Exception()
                     [dgraph.add_edge(v, c) for v in c.variables]
 
-                    print 'BASE ({}) {}'.format(len(c.variables), c)
+                    # print 'BASE ({}) {}'.format(len(c.variables), c)
                     if len(c.variables) == len(variables):
                         yield __query_context(ctx, c).solution()
                     else:
