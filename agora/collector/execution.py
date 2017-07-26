@@ -46,7 +46,7 @@ from agora.collector.http import get_resource_ttl, RDF_MIMES, http_get
 from agora.engine.plan.graph import AGORA
 from agora.engine.utils import stopped
 
-pool = ThreadPoolExecutor(max_workers= (2 * multiprocessing.cpu_count()) + 1)
+pool = ThreadPoolExecutor(max_workers=(2 * multiprocessing.cpu_count()) + 1)
 
 __author__ = 'Fernando Serena'
 
@@ -296,6 +296,7 @@ class PlanWrapper(object):
     def __init__(self, plan):
         self.__ss = SSWrapper(plan)
         self.__graph = PlanGraph(plan, self.__ss)
+        self.__node_succesors = {}
 
         cycles = reduce(lambda x, y: y.union(x), self.__ss.cycles.values(), set([]))
 
@@ -350,47 +351,65 @@ class PlanWrapper(object):
     def successors(self, node):
         # type: (BNode) -> iter
 
+        if node in self.__node_succesors:
+            return self.__node_succesors[node]
+
         def filter_weight((n, n_data, edge_data)):
             weight = 2
             if edge_data.get('cycle', False):
                 weight = 5000
+            elif n_data.get('byPattern', False):
+                weight = -5000
             elif edge_data.get('onProperty', None) is not None:
-                weight = 1000
-            aggr_dist = 1000
-            patterns = n_data.get('byPattern', [])
-            if patterns:
-                weight = -aggr_dist
-                for tp in patterns:
-                    filtered_vars = list(self.__ss.filtered_vars(tp.defined_by))
-                    for ft in self.__ss.filter_trees(tp.defined_by):
-                        nodes = ft.graph.nodes()
-                        if tp.o in ft.graph:
-                            for v in filtered_vars:
-                                if tp.o in nodes and v in nodes:
-                                    try:
-                                        dist = nx.shortest_path(ft.graph, tp.o, v)
-                                        aggr_dist = min(aggr_dist, len(dist))
-                                    except nx.NetworkXNoPath:
-                                        pass
-                                    except nx.NetworkXError as e:
-                                        print e.message
-                    weight += aggr_dist
+                aggr_dist = 1000
+                patterns = on_property_nodes.get((n, edge_data.get('onProperty', None)), [])
+                if patterns:
+                    weight = -aggr_dist
+                    dist_modifier = None
+                    for tp in patterns:
+                        filtered_vars = list(self.__ss.filtered_vars(tp.defined_by))
+                        for ft in self.__ss.filter_trees(tp.defined_by):
+                            nodes = ft.graph.nodes()
+                            if tp.o in ft.graph:
+                                for v in filtered_vars:
+                                    if tp.o in nodes and v in nodes:
+                                        try:
+                                            dist = nx.shortest_path(ft.graph, tp.o, v)
+                                            dist_modifier = min(dist_modifier or 1000, len(dist))
+                                        except nx.NetworkXNoPath:
+                                            pass
+                                        except nx.NetworkXError as e:
+                                            print e.message
+                        weight -= (dist_modifier or 0)
 
             return weight
 
         suc = []
-        for (u, v, data) in self.__graph.edges_iter(node, data=True):
+        on_property_nodes = {}
+        all_suc = self.__graph.edges_iter(node, data=True)
+        for (u, v, data) in sorted(all_suc, key=lambda x: x[2].get('onProperty') is None):
             on_property = data.get('onProperty')
+
+            by_pattern = self.__graph.get_node_data(v).get('byPattern', None)
+            if by_pattern:
+                for tp in by_pattern:
+                    for n in filter(lambda x: x[1] == tp.p, on_property_nodes):
+                        on_property_nodes[n].add(tp)
+
             if isinstance(on_property, set):
                 for prop in on_property:
+                    on_property_nodes[(v, prop)] = set()
                     prop_data = data.copy()
                     prop_data['onProperty'] = prop
                     suc.append((v, self.__graph.get_node_data(v), prop_data))
             else:
+                if on_property:
+                    on_property_nodes[(v, on_property)] = set()
                 suc.append((v, self.__graph.get_node_data(v), data))
 
         sorted_suc = sorted(suc, key=lambda x: filter_weight(x))
 
+        self.__node_succesors[node] = sorted_suc
         return sorted_suc
 
     def filter(self, resource, space, variable):
@@ -651,18 +670,18 @@ class PlanExecutor(object):
             weight = int(x.s in var_filters) + int(x.o in var_filters)
             return weight
 
-        def __follow_in_breadth(n, next_seeds, tree_graph, parent=None):
+        def __follow_in_breadth(n, next_seeds, tree_graph, parent=None, queue=None):
             try:
                 threads = []
                 for s in next_seeds:
                     __check_stop()
                     try:
                         workers_queue.put_nowait(s)
-                        future = pool.submit(__follow_node, n, s, tree_graph, parent=parent)
+                        future = pool.submit(__follow_node, n, s, tree_graph, parent=parent, queue=queue)
                         threads.append(future)
                     except Queue.Full:
                         # If all threads are busy...I'll do it myself
-                        __follow_node(n, s, tree_graph, parent=parent)
+                        __follow_node(n, s, tree_graph, parent=parent, queue=queue)
 
                 if len(threads) >= workers:
                     wait(threads)
@@ -806,82 +825,146 @@ class PlanExecutor(object):
 
             return space_dict
 
-        def __process_seed_links(seed, p_links, graph, parent):
+        def __process_seed_links(seed, p_links, graph, parent, queue):
             for n, n_data, e_data in p_links:
                 on_property = e_data.get('onProperty', None)
                 next_seeds = set()
                 if on_property is not None:
                     new_parent = parent[:]
                     __process_link_seed(seed, graph, on_property, next_seeds)
-                    __follow_in_breadth(n, next_seeds, graph, new_parent)
+                    __follow_in_breadth(n, next_seeds, graph, new_parent, queue)
 
-        def __follow_node(node, seed, tree_graph, parent=None):
-            if parent is None:
-                parent = []
+            queue.put(None)
 
-            if len(parent) > 20:
-                return
-            if (node, seed) in parent:
-                return
+        def __send_quads(seed, quads, variables, space):
+            if not quads:
+                for v in variables:
+                    self.__wrapper.filter(seed, space, v)
+            else:
+                for q in quads:
+                    __put_quad_in_queue(q)
 
-            if (node, seed) in self.__node_seeds:
-                return
+        def __follow_node(node, seed, tree_graph, parent=None, queue=None):
+            found_triples = False
+            try:
+                if parent is None:
+                    parent = []
 
-            parent = parent[:]
-            parent.append((node, seed))
+                if len(parent) > 20:
+                    return
+                if (node, seed) in parent:
+                    return
 
-            with self.node_lock(node, seed):
-                try:
-                    if (node, seed) in self.__node_seeds:
-                        # print 'already visited: {} with {}'.format(node, seed)
-                        return
+                if (node, seed) in self.__node_seeds:
+                    return
 
-                    self.__node_seeds.add((node, seed))
+                parent = parent[:]
+                parent.append((node, seed))
 
-                    successors = list(self.__wrapper.successors(node))
-                    pattern_succ = filter(lambda (n, n_data, e_data): n_data.get('byPattern', []), successors)
+                with self.node_lock(node, seed):
+                    try:
+                        if (node, seed) in self.__node_seeds:
+                            # print 'already visited: {} with {}'.format(node, seed)
+                            return
 
-                    space_dict = __process_seed_patterns(seed, pattern_succ, tree_graph)
-                    if not (space_dict and not any([x['candidates'] for x in space_dict.values()])):
-                        link_succ = filter(
-                            lambda (n, n_data, e_data): not n_data.get('byPattern',
-                                                                       None) and e_data.get('onProperty',
-                                                                                            None) and not e_data.get(
-                                'cycle', False),
-                            successors)
+                        self.__node_seeds.add((node, seed))
 
-                        __process_seed_links(seed, link_succ, tree_graph, parent)
+                        successors = list(self.__wrapper.successors(node))
+                        pattern_succ = filter(lambda (n, n_data, e_data): n_data.get('byPattern', []), successors)
 
-                    for space, s_dict in space_dict.items():
-                        candidates = s_dict['candidates']
-                        seed_variables = s_dict['seed_v']
-                        quads = __process_candidates(candidates, space)
-                        if not quads:
-                            for v in seed_variables:
-                                self.__wrapper.filter(seed, space, v)
+                        follow_queue = Queue.Queue()
+                        follow_thread = None
+
+                        space_dict = __process_seed_patterns(seed, pattern_succ, tree_graph)
+                        if not (space_dict and not any([x['candidates'] for x in space_dict.values()])):
+                            link_succ = filter(
+                                lambda (n, n_data, e_data): not n_data.get('byPattern',
+                                                                           None) and e_data.get('onProperty',
+                                                                                                None) and not e_data.get(
+                                    'cycle', False),
+                                successors)
+
+                            if link_succ:
+                                follow_thread = Thread(target=__process_seed_links,
+                                                       args=(seed, link_succ, tree_graph, parent, follow_queue))
+                                follow_thread.start()
+
+                        if follow_thread:
+                            patterns = reduce(lambda x, y: x.union(y), map(lambda x: x[1]['byPattern'], pattern_succ),
+                                              set())
+                            predicates = set(map(lambda x: x.p, patterns))
+                            links = set(reduce(lambda x, y: x.union({y}), map(lambda x: x[2]['onProperty'], link_succ),
+                                               set()))
+                            direct_predicates = set.difference(predicates, links)
+                            predicate_pass = {pred: pred in direct_predicates for pred in predicates}
+                            retained_candidates = {}
+                            while True:
+                                child_msg = follow_queue.get()
+                                if not child_msg:
+                                    break
+
+                                child_seed, found = child_msg
+                                if found:
+                                    for space, s_dict in space_dict.items():
+                                        candidates = s_dict['candidates']
+                                        seed_variables = s_dict['seed_v']
+                                        child_candidates = filter(lambda x: x[2] == child_seed, candidates)
+
+                                        if all(predicate_pass.values()):
+                                            s_dict['candidates'] = set.difference(candidates, child_candidates)
+                                            quads = __process_candidates(child_candidates, space)
+                                            found_triples = bool(len(quads))
+                                            __send_quads(seed, quads, seed_variables, space)
+                                        else:
+                                            if space not in retained_candidates:
+                                                retained_candidates[space] = set()
+
+                                            for cc in child_candidates:
+                                                predicate_pass[cc[0].p] = True
+                                                retained_candidates[space].add(cc)
+
+                                            if all(predicate_pass.values()):
+                                                retained = retained_candidates.get(space, set())
+                                                retained.update(
+                                                    filter(lambda x: x[0].p in direct_predicates, candidates))
+                                                s_dict['candidates'] = set.difference(candidates, retained)
+                                                quads = __process_candidates(retained, space)
+                                                found_triples = bool(len(quads))
+                                                __send_quads(seed, quads, seed_variables, space)
+                                                # retained.clear()
                         else:
-                            for q in quads:
-                                __put_quad_in_queue(q)
+                            for space, s_dict in space_dict.items():
+                                candidates = s_dict['candidates']
+                                seed_variables = s_dict['seed_v']
+                                quads = __process_candidates(candidates, space)
+                                found_triples = bool(len(quads))
+                                __send_quads(seed, quads, seed_variables, space)
 
-                    if not follow_cycles:
-                        return
+                        if follow_thread:
+                            follow_thread.join()
 
-                    cycle_succ = filter(lambda (n, n_data, e_data): e_data.get('cycle', False), successors)
-                    next_seeds = set()
-                    for n, n_data, e_data in cycle_succ:
-                        on_property = e_data.get('onProperty', None)
-                        __process_link_seed(seed, tree_graph, on_property, next_seeds)
-                        next_seeds = set(filter(lambda s: (n, s) not in parent, next_seeds))
-                        if next_seeds:
-                            # print 'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
-                            __follow_in_breadth(n, next_seeds, tree_graph, parent)
+                        if not follow_cycles:
+                            return
 
-                except (Queue.Full, StopException):
-                    stop_event.set()
-                except Exception as e:
-                    traceback.print_exc()
-                    log.error(e.message)
-                    raise e
+                        cycle_succ = filter(lambda (n, n_data, e_data): e_data.get('cycle', False), successors)
+                        next_seeds = set()
+                        for n, n_data, e_data in cycle_succ:
+                            on_property = e_data.get('onProperty', None)
+                            __process_link_seed(seed, tree_graph, on_property, next_seeds)
+                            next_seeds = set(filter(lambda s: (n, s) not in parent, next_seeds))
+                            if next_seeds:
+                                # print 'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
+                                __follow_in_breadth(n, next_seeds, tree_graph, parent)
+
+                    except (Queue.Full, StopException):
+                        stop_event.set()
+                    except Exception as e:
+                        traceback.print_exc()
+                        log.error(e.message)
+                        raise e
+            finally:
+                if queue is not None:
+                    queue.put((seed, found_triples))
 
         def get_fragment_triples():
             """
