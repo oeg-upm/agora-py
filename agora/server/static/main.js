@@ -33,7 +33,7 @@ let circlePoint = function (feature, latlng) {
 
 let popUpName = function (feature, layer) {
     // does this feature have a property named popupContent?
-    if (feature.properties) {
+    if (Object.keys(feature.properties).length) {
         let message = "<div>";
         Object.keys(feature.properties).map(function (key, index) {
             message += "<strong>" + key + "</strong>: " + feature.properties[key] + "<br>";
@@ -328,15 +328,23 @@ let popUpName = function (feature, layer) {
                         'bindings.*', function (r) {
                             $scope.results.push(r);
 
+                            let props = {};
+                            Object.keys(r).map(function (key, index) {
+                                if (key !== 'wkt') {
+                                    props[key] = r[key].value;
+                                }
+                            });
+
                             try {
                                 let geojson = Terraformer.WKT.parse(r.wkt.value);
                                 let lgeo = L.geoJSON({
                                         "type": "Feature",
-                                        "properties": {},
+                                        "properties": props,
                                         "geometry": geojson
                                     },
                                     {
-                                        pointToLayer: circlePoint
+                                        pointToLayer: circlePoint,
+                                        onEachFeature: popUpName
                                     });
 
                                 $scope.layerGroup.addLayer(lgeo);
@@ -349,12 +357,6 @@ let popUpName = function (feature, layer) {
 
                                 if ($scope.latLons.indexOf(latLonStr) < 0) {
                                     $scope.latLons.push(latLonStr);
-                                    let props = {};
-                                    Object.keys(r).map(function (key, index) {
-                                        if (key !== 'wkt') {
-                                            props[key] = r[key].value;
-                                        }
-                                    });
                                     let lgeo = L.geoJSON({
                                             type: "Feature",
                                             properties: props,
