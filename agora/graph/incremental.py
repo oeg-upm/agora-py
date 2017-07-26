@@ -228,7 +228,7 @@ def incremental_eval_bgp(ctx, bgp):
         gen_thread.start()
 
         try:
-            while gen_data['collecting']:
+            while gen_data['collecting'] or not queue.empty():
                 if ctx.stop is not None:
                     if ctx.stop.value > 0:
                         raise StopIteration()

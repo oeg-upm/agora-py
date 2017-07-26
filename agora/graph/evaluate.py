@@ -110,14 +110,19 @@ def evalBGP(ctx, bgp):
     if isinstance(ctx, AgoraQueryContext) and ctx.incremental:
         try:
             for x in incremental_eval_bgp(ctx, bgp):
-                yielded.append(x)
+                yielded.append({str(k): str(x[k]) for k in x})
                 yield x
         except Exception:
             pass
+    else:
+        collect_bgp_fragment(ctx, bgp)
 
-    collect_bgp_fragment(ctx, bgp)
     for x in __evalBGP(ctx, bgp):
-        if x not in yielded:
+        if yielded:
+            x_str = {str(k): str(x[k]) for k in x}
+            if x_str not in yielded:
+                yield x
+        else:
             yield x
 
 
