@@ -172,7 +172,7 @@ def __eval_delta(c, graph, roots, variables, base=False):
             else:
                 continue
 
-            if len(graph.nodes()) > 1000:
+            if len(graph.nodes()) > 5000:
                 break
 
             # print 'DELTA ({}) {}'.format(len(inter.variables), inter)
@@ -234,8 +234,8 @@ def incremental_eval_bgp(ctx, bgp):
                         raise StopIteration()
                 try:
                     c, tp = queue.get(timeout=1.0)
-                    if len(dgraph.nodes()) > 1000:
-                        raise Exception()
+                    if len(dgraph.nodes()) > 5000:
+                        break
                     [dgraph.add_edge(v, c) for v in c.variables]
 
                     # print 'BASE ({}) {}'.format(len(c.variables), c)
