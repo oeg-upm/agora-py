@@ -22,24 +22,12 @@ import calendar
 import hashlib
 import logging
 import traceback
-from Queue import Empty, Full
+from Queue import Empty, Full, Queue
 from StringIO import StringIO
-from datetime import datetime, timedelta
-from multiprocessing import Queue
 from threading import Event, Lock, Thread
 
 import networkx as nx
 import redis
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import wait
-from rdflib import ConjunctiveGraph, Graph
-from rdflib import Literal, RDF, RDFS, URIRef, Variable
-from rdflib.plugins.sparql.algebra import translateQuery
-from rdflib.plugins.sparql.parser import Query
-from rdflib.plugins.sparql.parser import expandUnicodeEscapes
-from rdflib.plugins.sparql.sparql import QueryContext
-from shortuuid import uuid
-
 from agora.collector import Collector, triplify
 from agora.collector.execution import FilterTree, StopException
 from agora.engine.plan.agp import TP, AGP
@@ -48,6 +36,16 @@ from agora.engine.utils import stopped, Singleton
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
 from agora.graph import extract_tps_from_plan, extract_seed_types_from_plan
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait
+from datetime import datetime, timedelta
+from rdflib import ConjunctiveGraph, Graph
+from rdflib import Literal, RDF, RDFS, URIRef, Variable
+from rdflib.plugins.sparql.algebra import translateQuery
+from rdflib.plugins.sparql.parser import Query
+from rdflib.plugins.sparql.parser import expandUnicodeEscapes
+from rdflib.plugins.sparql.sparql import QueryContext
+from shortuuid import uuid
 
 __author__ = 'Fernando Serena'
 
@@ -256,24 +254,32 @@ class Fragment(object):
 
     @property
     def generator(self):
-        def listen(quad):
-            try:
-                listen_queue.put_nowait(quad)
-            except Full:
-                pass
-            except Exception:
-                traceback.print_exc()
+        def w_listen(ts):
+            def listen(quad):
+                if datetime.utcnow() > ts:
+                    try:
+                        listen_queue.put_nowait(quad)
+                    except Full as e:
+                        log.warn(e.message)
+                    except Exception:
+                        traceback.print_exc()
+
+            return listen
 
         if self.stored:
             for c in self.__tp_map:
                 for s, p, o in self.triples.get_context(str((self.fid, self.__tp_map[c]))):
                     yield self.__tp_map[c], s, p, o
         else:
+            until = datetime.utcnow()
+            listener = w_listen(until)
             try:
-                until = calendar.timegm(datetime.utcnow().timetuple())
+                until_ts = calendar.timegm(until.timetuple())
                 listen_queue = Queue(maxsize=100)
-                self.__observers.add(listen)
-                for c, s, p, o in self.stream.get(until):
+                with self.__lock:
+                    self.__observers.add(listener)
+
+                for c, s, p, o in self.stream.get(until_ts):
                     yield self.__tp_map[c], s, p, o
 
                 while not self.__aborted and (not self.__updated or not listen_queue.empty()):
@@ -287,9 +293,9 @@ class Fragment(object):
                     except Exception:
                         traceback.print_exc()
                         break
-                listen_queue.close()
             finally:
-                self.__observers.remove(listen)
+                with self.__lock:
+                    self.__observers.remove(listener)
 
     @property
     def plan(self):
@@ -320,8 +326,9 @@ class Fragment(object):
             self.__seed_digests[type] = m.digest().encode('base64').strip()
 
     def __notify(self, quad):
-        for observer in self.__observers:
-            observer(quad)
+        with self.__lock:
+            for observer in self.__observers:
+                observer(quad)
 
     def populate(self, collector):
         self.collecting = True
