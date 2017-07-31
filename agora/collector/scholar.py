@@ -25,6 +25,7 @@ import traceback
 from Queue import Empty, Full, Queue
 from StringIO import StringIO
 from threading import Event, Lock, Thread
+from multiprocessing import cpu_count
 
 import networkx as nx
 import redis
@@ -50,8 +51,6 @@ from shortuuid import uuid
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.collector.scholar')
-
-tpool = ThreadPoolExecutor(max_workers=50)
 
 
 def _remove_tp_filters(tp, filter_mapping={}, prefixes=None):
@@ -420,10 +419,10 @@ class Fragment(object):
 class FragmentIndex(object):
     __metaclass__ = Singleton
     instances = {}
-    # i_lock = Lock()
     daemon_event = Event()
     daemon_event.clear()
     daemon_th = None
+    tpool = ThreadPoolExecutor(max_workers=cpu_count())
 
     def __init__(self, id='', **kwargs):
         # type: (any, str) -> FragmentIndex
@@ -635,7 +634,8 @@ class FragmentIndex(object):
                                         collector.force_seed = index.force_seed
                                         log.info('Starting fragment collection: {}'.format(fragment.fid))
                                         try:
-                                            futures[fragment.fid] = tpool.submit(fragment.populate, collector)
+                                            futures[fragment.fid] = FragmentIndex.tpool.submit(fragment.populate,
+                                                                                               collector)
                                         except RuntimeError as e:
                                             traceback.print_exc()
                                             log.warn(e.message)

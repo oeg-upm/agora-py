@@ -26,13 +26,13 @@ import math
 import shutil
 import traceback
 from StringIO import StringIO
-from threading import Thread, Lock as TLock
+from threading import Thread
 from time import sleep
 
 import shortuuid
 from agora.collector.execution import parse_rdf
 from agora.collector.http import http_get, extract_ttl
-from agora.engine.utils import stopped
+from agora.engine.utils import stopped, get_immediate_subdirectories
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
 from concurrent.futures import ThreadPoolExecutor
@@ -45,22 +45,10 @@ __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.collector.cache')
 
-tpool = ThreadPoolExecutor(max_workers=1)
-
-_caches = {}
-_lock = TLock()
-
-
-def get(**kwargs):
-    tuple_id = tuple([kwargs[k] for k in sorted(kwargs.keys())])
-    with _lock:
-        if tuple_id not in _caches:
-            c = RedisCache(**kwargs)
-            _caches[tuple_id] = c
-        return _caches[tuple_id]
-
 
 class RedisCache(object):
+    tpool = ThreadPoolExecutor(max_workers=1)
+
     def __init__(self, persist_mode=False, key_prefix='', min_cache_time=5, force_cache_time=False,
                  base='store', path='cache', redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None):
         self.__key_prefix = key_prefix
@@ -74,6 +62,10 @@ class RedisCache(object):
         self.__lock = Lock(self._r, key_prefix)
 
         self.__resources_ts = {}
+
+        # Clean temporal folders under 'base' (others than 'path' subfolder)
+        for sub in filter(lambda x: x != path, get_immediate_subdirectories(base)):
+            shutil.rmtree('{}/{}'.format(self.__base_path, sub))
 
         for lock_key in self._r.keys('{}:l*'.format(self.__key_prefix)):
             self._r.delete(lock_key)
@@ -192,8 +184,8 @@ class RedisCache(object):
                 ttl = self.__min_cache_time
                 source, headers = response
                 if not isinstance(source, Graph):
-                    data = source
                     parse_rdf(g, source, format, headers)
+                    data = g.serialize(format='turtle')
                 else:
                     if g != source:
                         data = source.serialize(format='turtle')
@@ -213,7 +205,7 @@ class RedisCache(object):
         if isinstance(g, ConjunctiveGraph):
             if self.__persist_mode:
                 # g.close()
-                tpool.submit(self.__clean, g.identifier.toPython())
+                RedisCache.tpool.submit(self.__clean, g.identifier.toPython())
             else:
                 g.remove((None, None, None))
                 # g.close()

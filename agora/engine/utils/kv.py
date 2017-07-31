@@ -20,12 +20,10 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import logging
-from threading import RLock
 
 import redis
 import redislite
 from redis.exceptions import BusyLoadingError, RedisError
-from shortuuid import uuid
 
 from agora.engine.utils import prepare_store_path
 
@@ -51,33 +49,20 @@ def __check_kv(kv):
     return kv
 
 
-kvs = {}
-kv_lock = RLock()
-
-
 def get_kv(persist_mode=False, redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None, base='store',
            path='', **kwargs):
-    with kv_lock:
-        if persist_mode:
-            if redis_file is not None:
-                if redis_file not in kvs:
-                    prepare_store_path(base, path)
-                    kvs[redis_file] = redislite.StrictRedis('/'.join(filter(lambda x: x, [base, path, redis_file])))
-                return kvs[redis_file]
-            else:
-                pool = redis.ConnectionPool(host=redis_host, port=redis_port, db=redis_db)
-                kv = redis.StrictRedis(connection_pool=pool)
-                return __check_kv(kv)
+    if persist_mode:
+        if redis_file is not None:
+            prepare_store_path(base, path)
+            return redislite.StrictRedis(str('/'.join(filter(lambda x: x, [base, path, redis_file]))))
         else:
-            id = uuid()
-            kvs[id] = redislite.StrictRedis()
-            return kvs[id]
+            pool = redis.ConnectionPool(host=redis_host, port=redis_port, db=redis_db)
+            kv = redis.StrictRedis(connection_pool=pool)
+            return __check_kv(kv)
+    else:
+        # id = uuid()
+        return redislite.StrictRedis()
 
 
 def close():
-    with kv_lock:
-        for r in kvs.values():
-            try:
-                r.shutdown()
-            except Exception:
-                pass
+    pass

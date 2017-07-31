@@ -46,8 +46,6 @@ from agora.collector.http import get_resource_ttl, RDF_MIMES, http_get
 from agora.engine.plan.graph import AGORA
 from agora.engine.utils import stopped
 
-pool = ThreadPoolExecutor(max_workers=(2 * multiprocessing.cpu_count()) + 1)
-
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.collector.execution')
@@ -474,6 +472,8 @@ def parse_rdf(graph, content, format, headers):
 
 
 class PlanExecutor(object):
+    pool = ThreadPoolExecutor(max_workers=(2 * multiprocessing.cpu_count()) + 1)
+
     def __init__(self, plan):
 
         self.__wrapper = PlanWrapper(plan)
@@ -677,7 +677,7 @@ class PlanExecutor(object):
                     __check_stop()
                     try:
                         workers_queue.put_nowait(s)
-                        future = pool.submit(__follow_node, n, s, tree_graph, parent=parent, queue=queue)
+                        future = PlanExecutor.pool.submit(__follow_node, n, s, tree_graph, parent=parent, queue=queue)
                         threads.append(future)
                     except Queue.Full:
                         # If all threads are busy...I'll do it myself
@@ -1008,7 +1008,7 @@ class PlanExecutor(object):
                         break
                 except KeyboardInterrupt, e:
                     stop_event.set()
-                    pool.shutdown(wait=True)
+                    PlanExecutor.pool.shutdown(wait=True)
                     raise e
 
                 self.__last_iteration_ts = dt.now()
