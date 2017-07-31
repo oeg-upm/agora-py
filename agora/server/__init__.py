@@ -98,7 +98,7 @@ class Server(Flask):
 
     def produce(self, result, produce_types=()):
         if result is None:
-            return ''
+            result = ''
 
         if hasattr(result, 'next'):
             response = Response(stream_with_context(result), mimetype=produce_types[0])
