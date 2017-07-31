@@ -53,3 +53,10 @@ class Semaphore(object):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.value = 1
+
+
+def get_immediate_subdirectories(a_dir):
+    if not os.path.exists(a_dir):
+        os.makedirs(a_dir)
+    return [name for name in os.listdir(a_dir)
+            if os.path.isdir(os.path.join(a_dir, name))]
