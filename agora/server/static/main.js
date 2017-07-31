@@ -51,7 +51,7 @@ let popUpName = function (feature, layer) {
         .config(['$routeProvider', '$locationProvider',
             function ($routeProvider, $locationProvider) {
                 $routeProvider
-                    .when('/', {
+                    .otherwise({
                         templateUrl: 'sparql.html',
                         controller: 'SPARQLController',
                         controllerAs: 'sparql'
