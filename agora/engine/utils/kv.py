@@ -49,12 +49,17 @@ def __check_kv(kv):
     return kv
 
 
+kvs = []
+
+
 def get_kv(persist_mode=False, redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None, base='store',
            path='', **kwargs):
     if persist_mode:
         if redis_file is not None:
             prepare_store_path(base, path)
-            return redislite.StrictRedis(str('/'.join(filter(lambda x: x, [base, path, redis_file]))))
+            kv = redislite.StrictRedis(str('/'.join(filter(lambda x: x, [base, path, redis_file]))))
+            kvs.append(kv)
+            return kv
         else:
             pool = redis.ConnectionPool(host=redis_host, port=redis_port, db=redis_db)
             kv = redis.StrictRedis(connection_pool=pool)
@@ -65,4 +70,5 @@ def get_kv(persist_mode=False, redis_host='localhost', redis_port=6379, redis_db
 
 
 def close():
-    pass
+    for r in kvs:
+        r.shutdown()
