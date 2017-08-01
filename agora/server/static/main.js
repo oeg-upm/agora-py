@@ -50,9 +50,14 @@ let popUpName = function (feature, layer) {
     angular.module('AgoraApp', ['ngRoute', 'ngAnimate'])
         .config(['$routeProvider', '$locationProvider',
             function ($routeProvider, $locationProvider) {
+                let path = window.location.pathname;
+                if (!path.endsWith('/')) {
+                    path = path + '/';
+                }
+
                 $routeProvider
                     .otherwise({
-                        templateUrl: 'sparql.html',
+                        templateUrl: path + 'sparql.html',
                         controller: 'SPARQLController',
                         controllerAs: 'sparql'
                     });
@@ -102,6 +107,9 @@ let popUpName = function (feature, layer) {
                 }
 
                 $scope.baseUrl += $location.path();
+                if (!$scope.baseUrl.endsWith('/')) {
+                    $scope.baseUrl += '/';
+                }
 
                 YASQE.defaults.sparql.showQueryButton = false;
                 YASQE.defaults.sparql.endpoint = $scope.baseUrl + 'sparql';
