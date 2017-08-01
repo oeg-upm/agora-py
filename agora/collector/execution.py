@@ -826,15 +826,18 @@ class PlanExecutor(object):
             return space_dict
 
         def __process_seed_links(seed, p_links, graph, parent, queue):
-            for n, n_data, e_data in p_links:
-                on_property = e_data.get('onProperty', None)
-                next_seeds = set()
-                if on_property is not None:
-                    new_parent = parent[:]
-                    __process_link_seed(seed, graph, on_property, next_seeds)
-                    __follow_in_breadth(n, next_seeds, graph, new_parent, queue)
+            try:
+                for n, n_data, e_data in p_links:
+                    on_property = e_data.get('onProperty', None)
+                    next_seeds = set()
+                    if on_property is not None:
+                        new_parent = parent[:]
+                        __process_link_seed(seed, graph, on_property, next_seeds)
+                        __follow_in_breadth(n, next_seeds, graph, new_parent, queue)
 
-            queue.put(None)
+                queue.put(None)
+            except StopException:
+                pass
 
         def __send_quads(seed, quads, variables, space):
             if not quads:
@@ -959,7 +962,7 @@ class PlanExecutor(object):
                     except (Queue.Full, StopException):
                         stop_event.set()
                     except Exception as e:
-                        traceback.print_exc()
+                        # traceback.print_exc()
                         log.error(e.message)
                         raise e
             finally:
