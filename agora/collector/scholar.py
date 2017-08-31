@@ -35,7 +35,7 @@ from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
 from agora.engine.utils import stopped, Singleton
 from agora.engine.utils.graph import get_triple_store
-from agora.engine.utils.kv import get_kv
+from agora.engine.utils.kv import get_kv, close_kv
 from agora.graph import extract_tps_from_plan, extract_seed_types_from_plan
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
@@ -113,7 +113,9 @@ class FragmentStream(object):
                     pipe.execute()
             return not_found
         except Exception as e:
+            traceback.print_exc()
             log.error(e.message)
+            raise e
 
     def clear(self):
         with self.store.pipeline() as pipe:
@@ -454,6 +456,20 @@ class FragmentIndex(object):
 
         return index
 
+    def clear(self):
+        with self.lock:
+            for fragment in self.fragments.values():
+                fragment.remove()
+            self.__fragments.clear()
+
+    def shutdown(self):
+        with self.lock:
+            del FragmentIndex.instances[self.id]
+            try:
+                close_kv(self.kv)
+            except Exception:
+                pass
+
     def notify(self):
         FragmentIndex.daemon_event.set()
 
@@ -615,37 +631,43 @@ class FragmentIndex(object):
         futures = {}
         while not stopped.is_set():
             FragmentIndex.daemon_event.clear()
-            for index in FragmentIndex.instances.values():
+            for index_key in FragmentIndex.instances.keys()[:]:
+                index = FragmentIndex.instances[index_key]
                 try:
                     with index.lock:
                         for fid in index.fragments.keys()[:]:
-                            fragment = index.fragments[fid]
-                            with fragment.lock:
-                                if fragment.aborted:
-                                    index.remove(fragment.fid)
-                                elif not fragment.updated and not fragment.collecting:
-                                    if not fragment.newcomer:
+                            try:
+                                fragment = index.fragments[fid]
+                                with fragment.lock:
+                                    if fragment.aborted:
                                         index.remove(fragment.fid)
-                                    else:
-                                        collector = Collector()
-                                        collector.planner = index.planner
-                                        collector.cache = index.cache
-                                        collector.loader = index.loader
-                                        collector.force_seed = index.force_seed
-                                        log.info('Starting fragment collection: {}'.format(fragment.fid))
-                                        try:
-                                            futures[fragment.fid] = FragmentIndex.tpool.submit(fragment.populate,
-                                                                                               collector)
-                                        except RuntimeError as e:
-                                            traceback.print_exc()
-                                            log.warn(e.message)
-                                elif fragment.updated and not index.force_seed:
-                                    for t, digest in fragment.seed_digests.items():
-                                        t_n3 = t.n3(fragment.agp.graph.namespace_manager)
-                                        current_digest = index.seed_type_digest(t_n3)
-                                        if digest != current_digest:
+                                    elif not fragment.updated and not fragment.collecting:
+                                        if not fragment.newcomer:
                                             index.remove(fragment.fid)
-                                            break
+                                        else:
+                                            collector = Collector()
+                                            collector.planner = index.planner
+                                            collector.cache = index.cache
+                                            collector.loader = index.loader
+                                            collector.force_seed = index.force_seed
+                                            log.info('Starting fragment collection: {}'.format(fragment.fid))
+                                            try:
+                                                futures[fragment.fid] = FragmentIndex.tpool.submit(fragment.populate,
+                                                                                                   collector)
+                                            except RuntimeError as e:
+                                                traceback.print_exc()
+                                                log.warn(e.message)
+                                    elif fragment.updated and not index.force_seed:
+                                        for t, digest in fragment.seed_digests.items():
+                                            t_n3 = t.n3(fragment.agp.graph.namespace_manager)
+                                            current_digest = index.seed_type_digest(t_n3)
+                                            if digest != current_digest:
+                                                index.remove(fragment.fid)
+                                                break
+                            except Exception as e:
+                                if index_key in FragmentIndex.instances:
+                                    del FragmentIndex.instances[index_key]
+                                # traceback.print_exc()
 
                     if futures:
                         log.info('Waiting for: {} collections'.format(len(futures)))
@@ -887,3 +909,6 @@ class Scholar(Collector):
                     'prefixes': self.index.planner.fountain.prefixes.items()}
         else:
             raise TypeError('No plan for given agp: {}'.format(agp))
+
+    def shutdown(self):
+        self.index.shutdown()
