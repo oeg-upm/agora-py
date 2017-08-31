@@ -24,7 +24,7 @@ import logging
 import redis
 import redislite
 from redis.exceptions import BusyLoadingError, RedisError
-
+from time import sleep
 from agora.engine.utils import prepare_store_path
 
 __author__ = 'Fernando Serena'
@@ -50,6 +50,7 @@ def __check_kv(kv):
 
 
 kvs = []
+path_kvs = {}
 
 
 def get_kv(persist_mode=False, redis_host='localhost', redis_port=6379, redis_db=1, redis_file=None, base='store',
@@ -57,18 +58,48 @@ def get_kv(persist_mode=False, redis_host='localhost', redis_port=6379, redis_db
     if persist_mode:
         if redis_file is not None:
             prepare_store_path(base, path)
-            kv = redislite.StrictRedis(str('/'.join(filter(lambda x: x, [base, path, redis_file]))))
+            redis_path = str('/'.join(filter(lambda x: x, [base, path, redis_file])))
+            kv = redislite.StrictRedis(redis_path)
             kvs.append(kv)
+            path_kvs[redis_path + '.settings'] = kv
             return kv
         else:
             pool = redis.ConnectionPool(host=redis_host, port=redis_port, db=redis_db)
             kv = redis.StrictRedis(connection_pool=pool)
             return __check_kv(kv)
     else:
-        # id = uuid()
         return redislite.StrictRedis()
 
 
 def close():
     for r in kvs:
-        r.shutdown()
+        kvs.remove(r)
+        try:
+            r.shutdown()
+        except Exception as e:
+            print e.message
+
+
+def close_kv(kv, clear=False):
+    if isinstance(kv, str):
+        if kv in path_kvs:
+            path_kv = kv
+            kv = path_kvs[path_kv]
+            del path_kvs[path_kv]
+        else:
+            return False
+
+    if kv in kvs:
+        kvs.remove(kv)
+
+    retries = 0
+    while retries < 3:
+        try:
+            kv.shutdown()
+            return True
+        except Exception as e:
+            print e.message
+            retries += 1
+            sleep(0.5)
+
+    return False

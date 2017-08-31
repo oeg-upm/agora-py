@@ -19,7 +19,7 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import os
-from threading import Event, Lock
+from threading import Lock, Event
 
 __author__ = 'Fernando Serena'
 
