@@ -50,14 +50,9 @@ _st_lock = RLock()
 
 def get_triple_store(persist_mode=False, base='store', path='', **kwargs):
     if persist_mode:
-        st_id = (base, path)
-        with _st_lock:
-            if st_id not in _stores:
-                prepare_store_path(base, path)
-                graph = ConjunctiveGraph('Sleepycat', identifier=path)
-                graph.open('{}/{}'.format(base, path), create=True)
-                _stores[st_id] = graph
-            graph = _stores[st_id]
+        prepare_store_path(base, path)
+        graph = ConjunctiveGraph('Sleepycat', identifier=path)
+        graph.open('{}/{}'.format(base, path), create=True)
     else:
         graph = ConjunctiveGraph()
         graph.store.graph_aware = False
