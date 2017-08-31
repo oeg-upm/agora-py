@@ -23,7 +23,7 @@ import logging
 from agora.engine.fountain import AbstractFountain
 from agora.engine.fountain.onto import VocabularyNotFound, DuplicateVocabulary, VocabularyError
 from agora.engine.fountain.seed import InvalidSeedError, DuplicateSeedError
-from agora.server import Server, APIError, Conflict, TURTLE, NotFound, Client
+from agora.server import Server, APIError, Conflict, TURTLE, NotFound, Client, HTML
 
 __author__ = 'Fernando Serena'
 
@@ -61,7 +61,7 @@ def build(fountain, server=None, import_name=__name__):
         except TypeError as e:
             raise NotFound(e.message)
 
-    @server.get('/vocabs/<string:vid>', produce_types=(TURTLE,))
+    @server.get('/vocabs/<string:vid>', produce_types=(TURTLE, HTML))
     def get_vocabulary(vid):
         return fountain.get_vocabulary(vid)
 
