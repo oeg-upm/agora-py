@@ -62,7 +62,7 @@ let popUpName = function (feature, layer) {
                         controllerAs: 'sparql'
                     });
 
-                $locationProvider.html5Mode(true);
+                // $locationProvider.html5Mode(true);
             }])
         .controller('SPARQLController', ['$scope', '$log', '$http', '$timeout', '$q', '$location', '$window',
             function ($scope, $log, $http, $timeout, $q, $location, $window) {
@@ -106,7 +106,7 @@ let popUpName = function (feature, layer) {
                     $scope.baseUrl += ':' + $location.port();
                 }
 
-                $scope.baseUrl += $location.path();
+                $scope.baseUrl += $window.location.pathname;
                 if (!$scope.baseUrl.endsWith('/')) {
                     $scope.baseUrl += '/';
                 }
@@ -311,13 +311,7 @@ let popUpName = function (feature, layer) {
                         }
                     }, 1000);
 
-                    let qObj = $location.search();
-                    let qArgs = '';
-                    for (let k in qObj) {
-                        if (qObj.hasOwnProperty(k)) {
-                            qArgs += '&' + k + '=' + qObj[k];
-                        }
-                    }
+                    let qArgs = '&' + window.location.search.substring(1);
 
                     let oboeObj = oboe({
                         url: $scope.baseUrl + 'sparql?query=' + encodeURIComponent(yasqe.getValue()) + qArgs,
@@ -469,12 +463,7 @@ let popUpName = function (feature, layer) {
                     }
 
                     let qObj = $location.search();
-                    let qArgs = '';
-                    for (let k in qObj) {
-                        if (qObj.hasOwnProperty(k)) {
-                            qArgs += '&' + k + '=' + qObj[k];
-                        }
-                    }
+                    let qArgs = '&' + window.location.search.substring(1);
 
                     let lastLoaded = 0;
                     let preFill = '';

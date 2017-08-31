@@ -142,9 +142,9 @@
     font-family: Monoxil, sans-serif;
     font-size: 34px;
     color: #509dc8;
-    position: absolute;
-    padding-left: 40px;
     padding-top: 2px;
+    float: left;
+    cursor: default;
 }
 
 #rbadge {

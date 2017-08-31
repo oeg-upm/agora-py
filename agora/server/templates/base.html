@@ -36,16 +36,12 @@
             <div class="navbar-header" style="width: 100%">
                 <button type="button" class="navbar-toggle collapsed" data-toggle="collapse"
                         data-target="#bs-example-navbar-collapse-1" aria-expanded="false">
-                    <span class="sr-only">Toggle navigation</span>
-                    <span class="icon-bar"></span>
-                    <span class="icon-bar"></span>
-                    <span class="icon-bar"></span>
                 </button>
-                <div style="position: absolute">
-                    <img class="navbar-brand" src="{{ url_for('static', filename='agora-im.png') }}">
-                    <div id="agora">Agora</div>
-                </div>
-                <!-- <a class="navbar-brand" href="/">SimCáceres</a>-->
+                <a href="/" style="display:block ; float:left">
+                    <img id="menu-toggle" class="navbar-brand"
+                         src="{{ url_for('static', filename='agora-im.png') }}">
+                </a>
+                <div id="agora">Agora</div>
                 <img src="{{ url_for('static', filename='upm.png') }}" height="40"
                      style="margin-top: 5px; margin-left:15px" align="right">
                 <img src="{{ url_for('static', filename='logoOEG.png') }}" height="40" style="margin-top: 5px"
