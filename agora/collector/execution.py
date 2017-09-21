@@ -105,7 +105,7 @@ class PlanGraph(nx.DiGraph):
         self.add_node(node, seeds=seeds, **kwargs)
         for pred in pred_nodes:
             links = list(plan.objects(subject=node, predicate=AGORA.onProperty))
-            expected_types = list(plan.objects(subject=node, predicate=AGORA.expectedType))
+            expected_types = list(set(plan.objects(subject=node, predicate=AGORA.expectedType)))
             cycle_start = list(plan.objects(subject=node, predicate=AGORA.isCycleStartOf))
             link = links.pop() if links else None
             self.add_edge(pred, node, onProperty=link, expectedType=expected_types, cycleStart=cycle_start)
@@ -670,7 +670,7 @@ class PlanExecutor(object):
             weight = int(x.s in var_filters) + int(x.o in var_filters)
             return weight
 
-        def __follow_in_breadth(n, next_seeds, tree_graph, parent=None, queue=None):
+        def __follow_in_breadth(n, next_seeds, tree_graph, parent=None, queue=None, cycle=False):
             try:
                 threads = []
                 for s in next_seeds:
@@ -681,7 +681,7 @@ class PlanExecutor(object):
                         threads.append(future)
                     except Queue.Full:
                         # If all threads are busy...I'll do it myself
-                        __follow_node(n, s, tree_graph, parent=parent, queue=queue)
+                        __follow_node(n, s, tree_graph, parent=parent, queue=queue, cycle=cycle)
 
                 if len(threads) >= workers:
                     wait(threads)
@@ -721,9 +721,6 @@ class PlanExecutor(object):
         def __process_pattern(seed, space, tp, expected_types, check, graph):
             candidates = set([])
             with self.tp_lock(seed, tp):
-                if (space, tp.p, seed) in self.__node_seeds:
-                    return
-                self.__node_seeds.add((space, tp.p, seed))
                 self.__wrapper.filter_var(tp, tp.s)
 
                 if self.__wrapper.is_filtered(seed, space, tp.s):
@@ -753,9 +750,9 @@ class PlanExecutor(object):
                         if not sobs:
                             return
 
-                        filtered = True
                         obs_candidates = []
                         for object in sobs:
+                            filtered = True
                             __check_stop()
 
                             if not isinstance(tp.o, Variable):
@@ -777,8 +774,6 @@ class PlanExecutor(object):
                             if not filtered:
                                 candidate = (tp, seed, object)
                                 obs_candidates.append(candidate)
-                            else:
-                                return
 
                         candidates.update(obs_candidates)
                     except AttributeError as e:
@@ -788,7 +783,7 @@ class PlanExecutor(object):
                         __dereference_uri(graph, seed)
                         types = set(
                             graph.objects(subject=seed, predicate=RDF.type))
-                        if not set.intersection(types, expected_types):
+                        if tp.o not in types:
                             # print 'filtering ' + seed + ' for ' + str(tp.s)
                             return
 
@@ -798,30 +793,45 @@ class PlanExecutor(object):
 
         def __process_seed_patterns(seed, p_nodes, graph):
             space_dict = {}
+            seed_v_pass = {}
+
             for n, n_data, e_data in p_nodes:
-                patterns = n_data.get('byPattern', [])
                 check = n_data.get('check', False)
                 expected_types = e_data.get('expectedType', set())
                 spaces = n_data['spaces']
                 for space in spaces:
+                    patterns = filter(lambda p: p.defined_by == space, n_data.get('byPattern', []))
                     seed_v = set()
                     candidates = set()
+                    ef_patterns = set()
                     space_dict[space] = {
                         'candidates': candidates,
-                        'seed_v': seed_v
+                        'seed_v': seed_v,
+                        'patterns': ef_patterns
                     }
 
                     patterns = sorted(patterns, key=lambda x: __tp_weight(x), reverse=True)
                     for tp in patterns:
-                        if tp.defined_by == space:
-                            seed_v.add(tp.s)
-                            tp_candidates = __process_pattern(seed, space, tp, expected_types, check, graph)
-                            if tp_candidates:
-                                candidates.update(tp_candidates)
-                            else:
-                                self.__wrapper.filter(seed, space, tp.s)
-                                candidates.clear()
-                                break
+                        seed_v.add(tp.s)
+                        if tp.s not in seed_v_pass:
+                            seed_v_pass[tp.s] = True
+
+                        tp_candidates = __process_pattern(seed, space, tp, expected_types, check, graph)
+                        if tp_candidates:
+                            candidates.update(tp_candidates)
+                            ef_patterns.add(tp)
+                        else:
+                            seed_v_pass[tp.s] = False
+                            self.__wrapper.filter(seed, space, tp.s)
+
+            if not all(seed_v_pass.items()):
+                return {}
+
+            for seed_v in filter(lambda x: not seed_v_pass[x], seed_v_pass):
+                for s_dict in space_dict.values():
+                    if seed_v in s_dict['seed_v']:
+                        s_dict['candidates'] = set(filter(lambda x: x[0].s != seed_v, s_dict['candidates']))
+                        s_dict['seed_v'].remove(seed_v)
 
             return space_dict
 
@@ -840,26 +850,23 @@ class PlanExecutor(object):
                 pass
 
         def __send_quads(seed, quads, variables, space):
-            if not quads:
-                for v in variables:
-                    self.__wrapper.filter(seed, space, v)
-            else:
-                for q in quads:
-                    __put_quad_in_queue(q)
+            for q in quads:
+                __put_quad_in_queue(q)
 
-        def __follow_node(node, seed, tree_graph, parent=None, queue=None):
+        def __follow_node(node, seed, tree_graph, parent=None, queue=None, cycle=False):
             found_triples = False
             try:
                 if parent is None:
                     parent = []
 
-                if len(parent) > 20:
-                    return
+                evaluate_and_stop = False
                 if (node, seed) in parent:
                     return
 
                 if (node, seed) in self.__node_seeds:
-                    return
+                    if cycle:
+                        return
+                    evaluate_and_stop = True
 
                 parent = parent[:]
                 parent.append((node, seed))
@@ -867,84 +874,127 @@ class PlanExecutor(object):
                 with self.node_lock(node, seed):
                     try:
                         if (node, seed) in self.__node_seeds:
-                            # print 'already visited: {} with {}'.format(node, seed)
-                            return
+                            evaluate_and_stop = True
+                        else:
+                            self.__node_seeds.add((node, seed))
 
-                        self.__node_seeds.add((node, seed))
+                        try:
+                            __dereference_uri(tree_graph, seed)
+                        except:
+                            pass
+
+                        seed_types = set(tree_graph.objects(seed, RDF.type))
 
                         successors = list(self.__wrapper.successors(node))
-                        pattern_succ = filter(lambda (n, n_data, e_data): n_data.get('byPattern', []), successors)
-
-                        follow_queue = Queue.Queue()
-                        follow_thread = None
+                        spaces = set(
+                            reduce(lambda x, y: set.union(x, y), map(lambda x: x[1].get('spaces', set()), successors),
+                                   set()))
+                        pattern_succ = list(filter(
+                            lambda (n, n_data, e_data):
+                            n_data.get('byPattern', []) and set.intersection(seed_types,
+                                                                             e_data.get('expectedType', [])),
+                            successors))
+                        link_succ = list(filter(
+                            lambda (n, n_data, e_data): not n_data.get('byPattern', None) and e_data.get(
+                                'onProperty', None) and not e_data.get(
+                                'cycle', False) and set.intersection(seed_types, e_data.get('expectedType', [])),
+                            successors))
 
                         space_dict = __process_seed_patterns(seed, pattern_succ, tree_graph)
-                        if not (space_dict and not any([x['candidates'] for x in space_dict.values()])):
-                            link_succ = filter(
-                                lambda (n, n_data, e_data): not n_data.get('byPattern',
-                                                                           None) and e_data.get('onProperty',
-                                                                                                None) and not e_data.get(
-                                    'cycle', False),
-                                successors)
 
-                            if link_succ:
+                        for space in spaces:
+                            space_link_succ = filter(lambda x: space in x[1].get('spaces'), link_succ)
+                            space_pattern_succ = filter(lambda x: space in x[1].get('spaces'), pattern_succ)
+
+                            # Check if links and patterns successors have a common expectedType
+                            expected_in_patterns = set(reduce(lambda x, y: x + y,
+                                                              map(lambda x: x[2]['expectedType'],
+                                                                  space_pattern_succ), []))
+                            expected_in_links = set(reduce(lambda x, y: x + y,
+                                                           map(lambda x: x[2]['expectedType'],
+                                                               space_link_succ), []))
+
+                            if space_pattern_succ and not space_dict.get(space, {}).get('candidates'):
+                                val_space_link = []
+                                for l in space_link_succ:
+                                    l_expected = set(l[2]['expectedType'])
+                                    if expected_in_patterns.difference(l_expected):
+                                        val_space_link.append(l)
+
+                                space_link_succ = val_space_link
+
+                            follow_thread = None
+                            follow_queue = Queue.Queue()
+
+                            if not evaluate_and_stop and space_link_succ:
                                 follow_thread = Thread(target=__process_seed_links,
-                                                       args=(seed, link_succ, tree_graph, parent, follow_queue))
+                                                       args=(
+                                                           seed, space_link_succ[:], tree_graph, parent, follow_queue))
                                 follow_thread.start()
 
-                        if follow_thread:
-                            patterns = reduce(lambda x, y: x.union(y), map(lambda x: x[1]['byPattern'], pattern_succ),
-                                              set())
-                            predicates = set(map(lambda x: x.p, patterns))
-                            links = set(reduce(lambda x, y: x.union({y}), map(lambda x: x[2]['onProperty'], link_succ),
-                                               set()))
-                            direct_predicates = set.difference(predicates, links)
-                            predicate_pass = {pred: pred in direct_predicates for pred in predicates}
-                            retained_candidates = {}
-                            while True:
-                                child_msg = follow_queue.get()
-                                if not child_msg:
-                                    break
+                            if space in space_dict:
+                                s_dict = space_dict[space]
+                                patterns = s_dict['patterns']
 
-                                child_seed, found = child_msg
-                                if found:
-                                    for space, s_dict in space_dict.items():
-                                        candidates = s_dict['candidates']
-                                        seed_variables = s_dict['seed_v']
-                                        child_candidates = filter(lambda x: x[2] == child_seed, candidates)
+                                predicates = set(map(lambda x: x.p, patterns))
+                                links = set(
+                                    reduce(lambda x, y: x.union({y}), map(lambda x: x[2]['onProperty'], link_succ),
+                                           set()))
+                                direct_predicates = set.difference(predicates, links)
+                                predicate_pass = {pred: pred in direct_predicates for pred in predicates}
 
-                                        if all(predicate_pass.values()):
-                                            s_dict['candidates'] = set.difference(candidates, child_candidates)
-                                            quads = __process_candidates(child_candidates, space)
-                                            found_triples = bool(len(quads))
-                                            __send_quads(seed, quads, seed_variables, space)
-                                        else:
-                                            if space not in retained_candidates:
-                                                retained_candidates[space] = set()
+                                wait_for_links = set.intersection(expected_in_links, expected_in_patterns)
 
-                                            for cc in child_candidates:
-                                                predicate_pass[cc[0].p] = True
-                                                retained_candidates[space].add(cc)
+                                if all(predicate_pass.values()):
+                                    candidates = s_dict['candidates']
+                                    seed_variables = s_dict['seed_v']
+                                    quads = __process_candidates(candidates, space)
+                                    found_triples = bool(len(quads))
+                                    __send_quads(seed, quads, seed_variables, space)
+                                elif follow_thread and wait_for_links:
+                                    retained_candidates = {}
+                                    while True:
+                                        child_msg = follow_queue.get()
+                                        if not child_msg:
+                                            break
+
+                                        child_seed, found = child_msg
+                                        if found:
+                                            s_dict = space_dict[space]
+                                            candidates = s_dict['candidates']
+                                            seed_variables = s_dict['seed_v']
+                                            child_candidates = filter(lambda x: x[2] == child_seed, candidates)
 
                                             if all(predicate_pass.values()):
-                                                retained = retained_candidates.get(space, set())
-                                                retained.update(
-                                                    filter(lambda x: x[0].p in direct_predicates, candidates))
-                                                s_dict['candidates'] = set.difference(candidates, retained)
-                                                quads = __process_candidates(retained, space)
+                                                s_dict['candidates'] = set.difference(candidates, child_candidates)
+                                                quads = __process_candidates(child_candidates, space)
                                                 found_triples = bool(len(quads))
                                                 __send_quads(seed, quads, seed_variables, space)
-                                                # retained.clear()
-                        else:
-                            for space, s_dict in space_dict.items():
-                                candidates = s_dict['candidates']
-                                seed_variables = s_dict['seed_v']
-                                quads = __process_candidates(candidates, space)
-                                found_triples = bool(len(quads))
-                                __send_quads(seed, quads, seed_variables, space)
+                                            else:
+                                                if space not in retained_candidates:
+                                                    retained_candidates[space] = set()
 
-                        if follow_thread:
-                            follow_thread.join()
+                                                for cc in child_candidates:
+                                                    predicate_pass[cc[0].p] = True
+                                                    retained_candidates[space].add(cc)
+
+                                                if all(predicate_pass.values()):
+                                                    retained = retained_candidates.get(space, set())
+                                                    retained.update(
+                                                        filter(lambda x: x[0].p in direct_predicates, candidates))
+                                                    s_dict['candidates'] = set.difference(candidates, retained)
+                                                    quads = __process_candidates(retained, space)
+                                                    found_triples = bool(len(quads))
+                                                    __send_quads(seed, quads, seed_variables, space)
+
+                                    if all(predicate_pass.values()):
+                                        candidates = s_dict['candidates']
+                                        seed_variables = s_dict['seed_v']
+                                        quads = __process_candidates(candidates, space)
+                                        __send_quads(seed, quads, seed_variables, space)
+
+                            if follow_thread:
+                                follow_thread.join()
 
                         if not follow_cycles:
                             return
@@ -952,17 +1002,18 @@ class PlanExecutor(object):
                         cycle_succ = filter(lambda (n, n_data, e_data): e_data.get('cycle', False), successors)
                         next_seeds = set()
                         for n, n_data, e_data in cycle_succ:
+                            p = parent[:]
                             on_property = e_data.get('onProperty', None)
                             __process_link_seed(seed, tree_graph, on_property, next_seeds)
-                            next_seeds = set(filter(lambda s: (n, s) not in parent, next_seeds))
+                            next_seeds = set(filter(lambda s: (n, s) not in p, next_seeds))
                             if next_seeds:
-                                # print 'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
-                                __follow_in_breadth(n, next_seeds, tree_graph, parent)
+                                print 'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
+                                __follow_in_breadth(n, next_seeds, tree_graph, p, cycle=True)
 
                     except (Queue.Full, StopException):
                         stop_event.set()
                     except Exception as e:
-                        # traceback.print_exc()
+                        traceback.print_exc()
                         log.error(e.message)
                         raise e
             finally:
