@@ -90,7 +90,7 @@ def __base_generator(agp, ctx, fragment):
     ignore_tps = [str(tp) for (tp, v) in tp_single_vars if len(wire.neighbors(v)) > 1]
     for tp, ss, _, so in fragment:
         if ctx.stop is not None:
-            if ctx.stop.value > 0:
+            if ctx.stop.isSet():
                 break
 
         if str(tp) in ignore_tps:
@@ -115,7 +115,7 @@ def __exploit(c1, c2):
     return c
 
 
-def __joins(c, x):
+def __joins(c, x, v_paths):
     # type: (Context, Context) -> bool
     intersection = c.variables.intersection(x.variables)
     for v in intersection:
@@ -141,8 +141,8 @@ def common_descendants(graph, x, c, base):
     return False
 
 
-def filter_successor(graph, c, x, base):
-    return c.map != x.map and __joins(c, x) and not common_descendants(graph, c, x, base)
+def filter_successor(graph, v_paths, c, x, base):
+    return c.map != x.map and __joins(c, x, v_paths) and not common_descendants(graph, c, x, base)
 
 
 def union(x, y):
@@ -154,7 +154,7 @@ def union(x, y):
     return r
 
 
-def __eval_delta(c, graph, roots, variables, base=False):
+def __eval_delta(c, graph, v_paths, roots, variables, base=False):
     # type: (Context, nx.DiGraph) -> iter
 
     solutions = ContextCollection()
@@ -162,7 +162,7 @@ def __eval_delta(c, graph, roots, variables, base=False):
     root_candidates = reduce(lambda x, y: union(x, set(graph.successors(y))), roots, set())
     root_candidates = filter(lambda x: set(x.variables).symmetric_difference(c.variables), root_candidates)
     for root in root_candidates:
-        if filter_successor(graph, c, root, base):
+        if filter_successor(graph, v_paths, c, root, base):
             inter = __exploit(root, c)
 
             if inter not in graph:
@@ -180,7 +180,7 @@ def __eval_delta(c, graph, roots, variables, base=False):
                 solutions.add(inter)
             else:
                 pred = filter(lambda x: graph.out_degree(x) > 1, [root, c])
-                for s in __eval_delta(inter, graph, pred, variables):
+                for s in __eval_delta(inter, graph, v_paths, pred, variables):
                     solutions.add(s)
 
     return solutions
@@ -201,13 +201,17 @@ def __generate(data):
     queue, agp, ctx, generator = data['queue'], data['agp'], data['context'], data['gen']
     for c, tp in __base_generator(agp, ctx, generator):
         queue.put((c, tp))
+        if ctx.stop is not None:
+            if ctx.stop.value > 0:
+                break
 
     data['collecting'] = False
 
 
 def incremental_eval_bgp(ctx, bgp):
     # type: (QueryContext, iter) -> iter
-    fragment_generator = ctx.graph.gen(bgp, filters=ctx.filters)
+
+    fragment_generator = ctx.graph.gen(bgp, filters=ctx.filters, stop_event=ctx.stop)
     queue = Queue()
     if fragment_generator is not None:
         dgraph = nx.DiGraph()
@@ -216,21 +220,42 @@ def incremental_eval_bgp(ctx, bgp):
         variables = set([v for v in agp.wire.nodes() if isinstance(v, Variable)])
         dgraph.add_nodes_from(variables)
 
+        wire = agp.wire
+        roots = agp.roots
+        non_roots = [node for node in wire.nodes() if isinstance(node, Variable) and node not in roots]
+        v_paths = {}
+        complex_agp = False
+
+        for root in roots:
+            for node in non_roots:
+                if node not in v_paths:
+                    v_paths[node] = set()
+                    try:
+                        node_paths = list(nx.all_simple_paths(wire, root, node))
+                        v_paths[node] = node_paths
+                        if len(node_paths) > 1:
+                            complex_agp = True
+                    except nx.NetworkXNoPath:
+                        pass
+
         gen_data = {
             'queue': queue,
             'agp': agp,
             'context': ctx,
             'gen': fragment_generator,
-            'collecting': True
+            'collecting': True,
         }
 
         gen_thread = Thread(target=__generate, args=(gen_data,))
         gen_thread.start()
 
         try:
+            if complex_agp:
+                raise Exception
+
             while gen_data['collecting'] or not queue.empty():
                 if ctx.stop is not None:
-                    if ctx.stop.value > 0:
+                    if ctx.stop.isSet():
                         raise StopIteration()
                 try:
                     c, tp = queue.get(timeout=1.0)
@@ -243,17 +268,9 @@ def incremental_eval_bgp(ctx, bgp):
                         yield __query_context(ctx, c).solution()
                     else:
                         if isinstance(tp.o, Variable) and isinstance(tp.s, Variable):
-                            for solution in __eval_delta(c, dgraph, c.variables, variables, base=True):
+                            for solution in __eval_delta(c, dgraph, v_paths, c.variables, variables, base=True):
                                 yield __query_context(ctx, solution).solution()
                 except Empty:
                     pass
-
-            # for v in variables:
-            #     variable_succ = dgraph.successors(v)
-            #     for c in variable_succ:
-            #         for solution in __eval_delta(c, dgraph, c.variables, variables, base=True):
-            #             yield __query_context(ctx, solution).solution()
         finally:
             gen_thread.join()
-
-
