@@ -110,7 +110,7 @@ def evalBGP(ctx, bgp):
     if isinstance(ctx, AgoraQueryContext) and ctx.incremental:
         try:
             for x in incremental_eval_bgp(ctx, bgp):
-                yielded.append({str(k): str(x[k]) for k in x})
+                yielded.append({unicode(k): unicode(x[k]) for k in x})
                 yield x
         except Exception:
             pass
@@ -119,7 +119,7 @@ def evalBGP(ctx, bgp):
 
     for x in __evalBGP(ctx, bgp):
         if yielded:
-            x_str = {str(k): str(x[k]) for k in x}
+            x_str = {unicode(k): unicode(x[k]) for k in x}
             if x_str not in yielded:
                 yield x
         else:
@@ -232,11 +232,18 @@ def __serialize_expr(expr, context=None):
                 if 'REGEX' in expr.name:
                     expr_str = u'REGEX({}, "{}"'.format(expr.text.n3(), expr.pattern)
                     if expr.flags:
-                        expr_str += u', {}'.format(expr.flags)
+                        expr_str += u', "{}"'.format(expr.flags)
                     expr_str += u')'
                     return expr_str
                 else:
-                    return u'{}({})'.format(expr.name.replace('Builtin_', ''), expr.arg.n3())
+                    if 'arg' in expr:
+                        return u'{}({})'.format(expr.name.replace('Builtin_', ''), expr.arg.n3())
+                    else:
+                        if isinstance(expr.arg1, Expr):
+                            arg1_str = __serialize_expr(expr.arg1, expr.name)
+                        else:
+                            arg1_str = expr.arg1.n3()
+                        return u'{}({},{})'.format(expr.name.replace('Builtin_', ''), arg1_str, expr.arg2.n3())
             expr_str = __serialize_expr(expr.expr, expr.name)
 
             if 'Unary' in expr.name:
@@ -533,11 +540,11 @@ def evalConstructQuery(ctx, query):
 
 
 class AgoraQueryContext(QueryContext):
-    def __init__(self, graph=None, bindings=None, incremental=True, stop=None, **kwargs):
+    def __init__(self, graph=None, bindings=None, incremental=True, stop_event=None, **kwargs):
         super(AgoraQueryContext, self).__init__(graph, bindings)
         self.incremental = incremental
         self.filters = {}
-        self.stop = stop
+        self.stop = stop_event
 
     def clone(self, bindings=None):
         r = AgoraQueryContext(
