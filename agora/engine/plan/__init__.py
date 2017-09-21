@@ -182,7 +182,6 @@ def _get_tp_paths(fountain, agp, force_seed=None):
     str_roots = map(lambda x: str(x), roots)
     for c in graph.contexts():
         root_tps = filter(lambda (s, pr, o): str(s).replace('?', '') in str_roots, c.triples((None, None, None)))
-        root_predicates = map(lambda x: graph.qname(x[1]), root_tps)
 
         root_types = _root_types(fountain, root_tps, c)
         root_types = {_subject_transform(tp[0]): types for tp, types in root_types.items()}
@@ -230,6 +229,11 @@ def _get_tp_paths(fountain, agp, force_seed=None):
         if not force_seed:
             force_seed = context_force_seeds.get(c, [])
 
+        root_predicates = {}
+        for str_root in str_roots:
+            root_tps = filter(lambda (s, pr, o): str(s).replace('?', '') == str_root, c.triples((None, None, None)))
+            root_predicates[str_root] = map(lambda x: graph.qname(x[1]), root_tps)
+
         for (root, tp), paths in agp_paths.items():
             r_types = root_types.get(root, [])
             for rt in r_types:
@@ -242,7 +246,8 @@ def _get_tp_paths(fountain, agp, force_seed=None):
                     continue
 
                 rt_paths = filter(
-                    lambda x: not x['steps'] or x['steps'][-1].get('property', None) not in root_predicates,
+                    lambda x: not x['steps'] or x['steps'][-1].get('property', None) not in root_predicates[
+                        str(root).replace('?', '')],
                     rt_paths)
 
                 if not rt_paths:
@@ -269,8 +274,9 @@ def _get_tp_paths(fountain, agp, force_seed=None):
             tp_paths[tp] = []
             tp_hints[tp] = {}
 
-        if tp.p == RDF.type and isinstance(tp.o, URIRef) and tp.o not in type_dicts:
-            type_dicts[tp.o] = fountain.get_type(graph.qname(tp.o))
+        if tp.p == RDF.type and isinstance(tp.o, URIRef):
+            if tp.o not in type_dicts:
+                type_dicts[tp.o] = fountain.get_type(graph.qname(tp.o))
             tp_hints[tp]['check'] = tp_hints[tp].get('check', False) or False
 
         if rt in seed_paths:
