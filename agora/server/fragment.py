@@ -22,7 +22,10 @@
 import logging
 import re
 import traceback
+from Queue import Queue, Empty
 from contextlib import closing
+from datetime import datetime
+from threading import Thread
 
 from flask import request
 
@@ -30,6 +33,7 @@ from agora import Agora
 from agora.collector import triplify
 from agora.engine.plan import AGP
 from agora.engine.plan.agp import TP
+from agora.engine.utils import Semaphore
 from agora.server import Server, APIError, Client
 
 __author__ = 'Fernando Serena'
@@ -48,35 +52,55 @@ def build(agora, server=None, import_name=__name__, fragment_function=None):
     @server.get('/fragment',
                 produce_types=('text/n3', 'application/agora-quad', 'application/agora-quad-min', 'text/html'))
     def get_fragment():
-        def gen_fragment():
-            first = True
-            best_mime = request.accept_mimetypes.best
-            if best_mime.startswith('application/agora-quad'):
-                for c, s, p, o in generator:
-                    if '-min' in best_mime:
-                        quad = u'{}·{}·{}·{}\n'.format(c, s.n3(plan.namespace_manager),
-                                                       p.n3(plan.namespace_manager), o.n3(plan.namespace_manager))
-                    else:
-                        quad = u'{}·{}·{}·{}\n'.format(c, s.n3(), p.n3(), o.n3())
+        def gen_thread(status):
+            try:
+                first = True
+                min_quads = '-min' in best_mime
+                if best_mime.startswith('application/agora-quad'):
+                    for c, s, p, o in generator:
+                        if min_quads:
+                            quad = u'{}·{}·{}·{}\n'.format(c, s.n3(plan.namespace_manager),
+                                                           p.n3(plan.namespace_manager), o.n3(plan.namespace_manager))
+                        else:
+                            quad = u'{}·{}·{}·{}\n'.format(c, s.n3(), p.n3(), o.n3())
 
-                    yield quad
-            else:
-                if first:
-                    for prefix, uri in prefixes.items():
-                        yield '@prefix {}: <{}> .\n'.format(prefix, uri)
-                    yield '\n'
-                for c, s, p, o in generator:
-                    triple = u'{} {} {} .\n'.format(s.n3(plan.namespace_manager),
-                                                    p.n3(plan.namespace_manager), o.n3(plan.namespace_manager))
+                        queue.put(quad)
+                else:
+                    if first:
+                        for prefix, uri in prefixes.items():
+                            queue.put('@prefix {}: <{}> .\n'.format(prefix, uri))
+                        queue.put('\n')
+                    for c, s, p, o in generator:
+                        triple = u'{} {} {} .\n'.format(s.n3(plan.namespace_manager),
+                                                        p.n3(plan.namespace_manager), o.n3(plan.namespace_manager))
 
-                    yield triple
+                        queue.put(triple)
+            except Exception as e:
+                status['exception'] = e
+
+            status['completed'] = True
+
+        def gen_queue(status):
+            with stop_event:
+                while not status['completed'] or not queue.empty():
+                    status['last'] = datetime.now()
+                    try:
+                        for chunk in queue.get(timeout=1.0):
+                            yield chunk
+                    except Empty:
+                        if not status['completed']:
+                            yield '\n'
+                        elif status['exception']:
+                            raise APIError(status['exception'].message)
 
         try:
+            stop_event = Semaphore()
             query = request.args.get('query', None)
+            kwargs = dict(request.args.items())
             if query is not None:
-                kwargs = dict(request.args.items())
+
                 del kwargs['query']
-                fragment_dict = fragment_function(query=query, **kwargs)
+                fragment_dict = fragment_function(query=query, stop_event=stop_event, **kwargs)
             else:
                 tps_str = request.args.get('agp')
                 tps_match = re.search(r'\{(.*)\}', tps_str).groups(0)
@@ -85,11 +109,21 @@ def build(agora, server=None, import_name=__name__, fragment_function=None):
 
                 tps = re.split('\. ', tps_match[0])
                 agp = AGP([tp.strip() for tp in tps], prefixes=agora.planner.fountain.prefixes)
-                fragment_dict = fragment_function(agps=[agp])
+                fragment_dict = fragment_function(agps=[agp], **kwargs)
             plan = fragment_dict['plan']
             generator = fragment_dict['generator']
             prefixes = fragment_dict['prefixes']
-            return gen_fragment()
+            best_mime = request.accept_mimetypes.best
+            queue = Queue()
+            request_status = {
+                'completed': False,
+                'exception': None
+            }
+            stream_th = Thread(target=gen_thread, args=(request_status,))
+            stream_th.daemon = False
+            stream_th.start()
+
+            return gen_queue(request_status)
         except Exception, e:
             traceback.print_exc()
             raise APIError(e.message)

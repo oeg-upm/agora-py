@@ -23,7 +23,7 @@ import logging
 import traceback
 from Queue import Queue, Empty
 from datetime import datetime
-from threading import Thread, Semaphore
+from threading import Thread
 
 from flask import redirect
 from flask import render_template
@@ -127,7 +127,7 @@ def build(agora, server=None, import_name=__name__, query_function=None):
                 del kwargs['incremental']
 
             stop_event = Semaphore()
-            gen = query_function(query, incremental=incremental, stop=stop_event, **kwargs)
+            gen = query_function(query, incremental=incremental, stop_event=stop_event, **kwargs)
             queue = Queue()
             request_status = {
                 'completed': False,
