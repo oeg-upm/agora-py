@@ -329,30 +329,32 @@ let popUpName = function (feature, layer) {
                     ).node(
                         'bindings.*', function (r) {
                             $scope.results.push(r);
-
+                            let geometries = [];
                             let props = {};
                             Object.keys(r).map(function (key, index) {
-                                if (key !== 'wkt') {
+                                try {
+                                    let geometry = Terraformer.WKT.parse(r[key].value);
+                                    geometries.push(geometry);
+                                    $scope.geoSolutions = true;
+                                } catch (Exception) {
                                     props[key] = r[key].value;
                                 }
                             });
 
-                            try {
-                                let geojson = Terraformer.WKT.parse(r.wkt.value);
+                            geometries.forEach(function(geom) {
                                 let lgeo = L.geoJSON({
-                                        "type": "Feature",
-                                        "properties": props,
-                                        "geometry": geojson
-                                    },
-                                    {
-                                        pointToLayer: circlePoint,
-                                        onEachFeature: popUpName
-                                    });
+                                            "type": "Feature",
+                                            "properties": props,
+                                            "geometry": geom
+                                        },
+                                        {
+                                            pointToLayer: circlePoint,
+                                            onEachFeature: popUpName
+                                        });
 
                                 $scope.layerGroup.addLayer(lgeo);
-                                $scope.geoSolutions = true;
-                            } catch (Exception) {
-                            }
+                            });
+
 
                             if (r.lat !== undefined && r.lon !== undefined) {
                                 let latLonStr = String(r.lat.value) + String(r.lon.value);
