@@ -97,7 +97,7 @@ class Agora(object):
 
     def query(self, query, collector=None, cache=None, loader=None, force_seed=None, **kwargs):
         graph = self.__get_agora_graph(collector, cache, loader, force_seed)
-        return graph.query(query, collector=collector, **kwargs)
+        return graph.query(query, collector=collector, cache=cache, loader=loader, force_seed=force_seed, **kwargs)
 
     def fragment(self, query=None, agps=None, collector=None, cache=None, loader=None, force_seed=None):
         if not (query or agps):
@@ -113,7 +113,7 @@ class Agora(object):
                 result.add((s, p, o))
         return result
 
-    def fragment_generator(self, query=None, agps=None, collector=None, cache=None, loader=None, force_seed=None):
+    def fragment_generator(self, query=None, agps=None, collector=None, cache=None, loader=None, force_seed=None, stop_event=None):
         def comp_gen(gens):
             for gen in [g['generator'] for g in gens]:
                 for q in gen:
@@ -122,7 +122,8 @@ class Agora(object):
         graph = self.__get_agora_graph(collector, cache, loader, force_seed)
         agps = list(graph.agps(query)) if query else agps
 
-        generators = [graph.collector.get_fragment_generator(agp, filters=filters) for agp, filters in agps]
+        generators = [graph.collector.get_fragment_generator(agp, filters=filters, stop_event=stop_event) for agp, filters in
+                      agps]
         prefixes = {}
         comp_plan = Graph(namespace_manager=graph.namespace_manager)
         for g in generators:

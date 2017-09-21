@@ -53,6 +53,12 @@ class Semaphore(object):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.value = 1
+        
+    def isSet(self):
+        return self.value == 1
+
+    def set(self):
+        pass
 
 
 def get_immediate_subdirectories(a_dir):
