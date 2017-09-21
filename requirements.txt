@@ -4,7 +4,7 @@ redislite
 redis
 hiredis
 rdflib==4.2.1
-networkx
+networkx==1.11
 futures
 rfc3987
 flask
