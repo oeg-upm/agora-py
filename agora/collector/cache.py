@@ -37,7 +37,7 @@ from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime as dt, timedelta as delta
-from rdflib import ConjunctiveGraph
+from rdflib import ConjunctiveGraph, URIRef
 from rdflib.graph import Graph
 from redis.lock import Lock
 
@@ -131,7 +131,6 @@ class RedisCache(object):
                         log.debug('Removing {} resouces from cache...'.format(len(obsolete)))
                         for uri in obsolete:
                             with self.uri_lock(uri):
-                                uuid = self._r.hget(gids_key, uri)
                                 try:
                                     self._r.hdel(gids_key, uri)
                                 except Exception:
@@ -185,11 +184,13 @@ class RedisCache(object):
                 source, headers = response
                 if not isinstance(source, Graph):
                     parse_rdf(g, source, format, headers)
+                    g.remove((None, None, URIRef(gid)))
                     data = g.serialize(format='turtle')
                 else:
                     if g != source:
-                        data = source.serialize(format='turtle')
-                        g.__iadd__(source)
+                        source.remove((None, None, URIRef(gid)))
+                    data = source.serialize(format='turtle')
+                    g.__iadd__(source)
 
                 if not self.__force_cache_time:
                     ttl = extract_ttl(headers) or ttl
@@ -204,11 +205,24 @@ class RedisCache(object):
     def release(self, g):
         if isinstance(g, ConjunctiveGraph):
             if self.__persist_mode:
-                # g.close()
                 RedisCache.tpool.submit(self.__clean, g.identifier.toPython())
             else:
                 g.remove((None, None, None))
-                # g.close()
+
+    def expire(self, gid):
+        with self.uri_lock(gid):
+            uuid = self._r.hget('{}:gids'.format(self.__cache_key), gid)
+            with self._r.pipeline(transaction=True) as p:
+                if not uuid:
+                    uuid = shortuuid.uuid()
+                    p.hset('{}:gids'.format(self.__cache_key), gid, uuid)
+
+                gid_key = '{}:{}'.format(self.__cache_key, uuid)
+                p.delete(gid_key)
+                p.execute()
+
+    def get_matching_uris(self, part):
+        return filter(lambda gid: part in gid, self._r.hkeys('{}:gids'.format(self.__cache_key)))
 
     def close(self):
         self.__enabled = False
