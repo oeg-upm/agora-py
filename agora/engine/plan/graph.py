@@ -130,7 +130,10 @@ def graph_plan(plan, fountain, agp):
 
         p_node = get_pattern_node(pattern)
         if pattern[1] == RDF.type and isinstance(pattern[2], URIRef):
-            b_node = BNode(previous_node.n3() + '/#end')  # + tree_graph.qname(pattern[2]))
+            b_id = previous_node.n3()
+            b_id += '/#end'
+
+            b_node = BNode(b_id)
             tree_graph.add((b_node, AGORA.expectedType, pattern[2]))
             tree_graph.add((previous_node, AGORA.next, b_node))
             tree_graph.add((b_node, AGORA.byPattern, p_node))
@@ -214,7 +217,7 @@ def graph_plan(plan, fountain, agp):
         roots.add(str_r)
     for res in expected_res:
         to_be_extended = True
-        type_expansion = False
+        # type_expansion = False
         near_patterns = set(tree_graph.objects(res.n, AGORA.byPattern))
         for prev in tree_graph.subjects(AGORA.next, res.n):
             for sib_node in tree_graph.objects(prev, AGORA.next):
@@ -226,9 +229,9 @@ def graph_plan(plan, fountain, agp):
             if p_pred == RDF.type:
                 p_type = list(plan_graph.objects(p_node, AGORA.object)).pop()
                 if isinstance(p_type, URIRef):
-                    type_expansion = True
+                    # type_expansion = True
                     for et in expected_types:
-                        tree_graph.remove((res.n, AGORA.expectedType, et))
+                        # tree_graph.remove((res.n, AGORA.expectedType, et))
                         if et == p_type:
                             q_expected_types = _type_subtree(fountain, tree_graph.qname(et))
                             for et_q in q_expected_types:
@@ -241,16 +244,16 @@ def graph_plan(plan, fountain, agp):
             if subject_str not in roots:
                 to_be_extended = False
 
-        if to_be_extended:
-            node_types[res.n] = set([tree_graph.qname(t) for t in tree_graph.objects(res.n, AGORA.expectedType)])
+            if to_be_extended:
+                node_types[res.n] = set([tree_graph.qname(t) for t in tree_graph.objects(res.n, AGORA.expectedType)])
 
-        if not type_expansion:
-            tree_graph.remove((res.n, AGORA.expectedType, None))
-            q_expected_types = set(map(lambda x: tree_graph.qname(x), expected_types))
-            q_expected_types = filter(
-                lambda x: not set.intersection(set(fountain.get_type(x)['sub']), q_expected_types), q_expected_types)
-            for et_q in q_expected_types:
-                tree_graph.add((res.n, AGORA.expectedType, __extend_uri(prefixes, et_q)))
+                # if not type_expansion:
+                #     tree_graph.remove((res.n, AGORA.expectedType, None))
+                #     q_expected_types = set(map(lambda x: tree_graph.qname(x), expected_types))
+                #     q_expected_types = filter(
+                #         lambda x: not set.intersection(set(fountain.get_type(x)['sub']), q_expected_types), q_expected_types)
+                #     for et_q in q_expected_types:
+                #         tree_graph.add((res.n, AGORA.expectedType, __extend_uri(prefixes, et_q)))
 
     for c_id, root_types in c_roots.items():
         found_extension = False

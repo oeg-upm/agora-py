@@ -145,7 +145,7 @@ class AGP(set):
         if cycle_elms:
             cycle_elms = set.union(*map(lambda x: set(x), list(nx.simple_cycles(w))))
         in_deg = list(w.in_degree_iter())
-        min_in = min(map(lambda x: x[1], in_deg))
+        min_in = min(map(lambda x: x[1], in_deg)) if in_deg else 0
         roots = map(lambda x: x[0], filter(filter_root, list(w.in_degree_iter())))
         return roots
 
