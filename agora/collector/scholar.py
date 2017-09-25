@@ -24,22 +24,14 @@ import logging
 import traceback
 from Queue import Empty, Full, Queue
 from StringIO import StringIO
-from threading import Event, Lock, Thread
+from datetime import datetime, timedelta
 from multiprocessing import cpu_count
+from threading import Event, Lock, Thread
 
 import networkx as nx
 import redis
-from agora.collector import Collector, triplify
-from agora.collector.execution import FilterTree, StopException
-from agora.engine.plan.agp import TP, AGP
-from agora.engine.plan.graph import AGORA
-from agora.engine.utils import stopped, Singleton
-from agora.engine.utils.graph import get_triple_store
-from agora.engine.utils.kv import get_kv, close_kv
-from agora.graph import extract_tps_from_plan, extract_seed_types_from_plan
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait
-from datetime import datetime, timedelta
 from rdflib import ConjunctiveGraph, Graph
 from rdflib import Literal, RDF, RDFS, URIRef, Variable
 from rdflib.plugins.sparql.algebra import translateQuery
@@ -47,6 +39,16 @@ from rdflib.plugins.sparql.parser import Query
 from rdflib.plugins.sparql.parser import expandUnicodeEscapes
 from rdflib.plugins.sparql.sparql import QueryContext
 from shortuuid import uuid
+
+from agora.collector import Collector, triplify
+from agora.collector.execution import StopException
+from agora.collector.plan import FilterTree
+from agora.engine.plan.agp import TP, AGP
+from agora.engine.plan.graph import AGORA
+from agora.engine.utils import stopped, Singleton
+from agora.engine.utils.graph import get_triple_store
+from agora.engine.utils.kv import get_kv, close_kv
+from agora.graph import extract_tps_from_plan, extract_seed_types_from_plan
 
 __author__ = 'Fernando Serena'
 
@@ -564,13 +566,14 @@ class FragmentIndex(object):
     def get(self, agp, general=False, filters=None):
         # type: (AGP, bool) -> dict
         mapping = None
+        fragment = None
+        filter_mapping = {}
         with self.lock:
             active_fragments = filter(lambda x: x not in self.__orphaned, self.__fragments.keys())
             for fragment_id in sorted(active_fragments, key=lambda x: abs(
                             len(self.__fragments[x].filters) - len(filters)), reverse=False):
                 fragment = self.__fragments[fragment_id]
                 mapping = fragment.mapping(agp, filters)
-                filter_mapping = {}
                 if mapping:
                     break
 

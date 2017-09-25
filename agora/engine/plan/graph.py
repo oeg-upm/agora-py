@@ -224,6 +224,13 @@ def graph_plan(plan, fountain, agp):
                 if sib_node != res.n:
                     near_patterns.update(set(tree_graph.objects(sib_node, AGORA.byPattern)))
         expected_types = list(tree_graph.objects(res.n, AGORA.expectedType))
+
+        q_expected_types = set(map(lambda x: tree_graph.qname(x), expected_types))
+        q_expected_types = filter(
+            lambda x: not set.intersection(set(fountain.get_type(x)['super']), q_expected_types), q_expected_types)
+        type_hierarchy = len(q_expected_types) == 1
+        tree_graph.add((res.n, AGORA.typeHierarchy, Literal(type_hierarchy)))
+
         for p_node in near_patterns:
             p_pred = list(plan_graph.objects(p_node, AGORA.predicate)).pop()
             if p_pred == RDF.type:
