@@ -286,6 +286,13 @@ class PlanWrapper(object):
         self.__link_successors = {}
         self.__node_links = {}
         self.__node_patterns = {}
+        self.__inverses = {}
+
+        for r in plan.query("""
+                SELECT DISTINCT ?p ?inv WHERE {
+                    ?inv owl:inverseOf ?p
+                }"""):
+            self.__inverses[r.p] = r.inv
 
         cycles = reduce(lambda x, y: y.union(x), self.__ss.cycles.values(), set([]))
 
@@ -321,6 +328,10 @@ class PlanWrapper(object):
             del n_data['seeds']
         self.__graph.add_node(n, n_data)
         return n
+
+    @property
+    def inverses(self):
+        return self.__inverses
 
     @property
     def graph(self):

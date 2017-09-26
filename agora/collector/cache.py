@@ -184,11 +184,11 @@ class RedisCache(object):
                 source, headers = response
                 if not isinstance(source, Graph):
                     parse_rdf(g, source, format, headers)
-                    g.remove((None, None, URIRef(gid)))
+                    # g.remove((None, None, URIRef(gid)))
                     data = g.serialize(format='turtle')
                 else:
-                    if g != source:
-                        source.remove((None, None, URIRef(gid)))
+                    # if g != source:
+                    #     source.remove((None, None, URIRef(gid)))
                     data = source.serialize(format='turtle')
                     g.__iadd__(source)
 

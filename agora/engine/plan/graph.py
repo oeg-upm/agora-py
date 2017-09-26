@@ -22,7 +22,7 @@ import hashlib
 import logging
 
 from rdflib import ConjunctiveGraph, URIRef, BNode, RDF, Literal, Variable
-from rdflib.namespace import Namespace, XSD, RDFS
+from rdflib.namespace import Namespace, XSD, RDFS, OWL
 
 __author__ = 'Fernando Serena'
 
@@ -279,6 +279,20 @@ def graph_plan(plan, fountain, agp):
                                 from_types)
         for dft in def_from_types:
             tree_graph.set((t, AGORA.fromType, __extend_uri(prefixes, dft)))
+
+    predicates = set(plan_graph.objects(predicate=AGORA.onProperty))
+    predicates.update(set(plan_graph.objects(predicate=AGORA.predicate)))
+    for p in predicates:
+        qp = plan_graph.qname(p)
+        try:
+            p_dict = fountain.get_property(qp)
+            inverse = p_dict.get('inverse', [])
+            for ip in inverse:
+                ext_ip = __extend_uri(prefixes, ip)
+                plan_graph.add((p, OWL.inverseOf, ext_ip))
+                plan_graph.add((ext_ip, OWL.inverseOf, p))
+        except:
+            pass
 
     for res in plan_graph.query("""SELECT ?tree ?sub ?nxt WHERE {
                            ?tree a agora:SearchTree ;                              

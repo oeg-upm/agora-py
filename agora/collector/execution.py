@@ -283,7 +283,11 @@ class PlanExecutor(object):
             __check_stop()
             try:
                 __dereference_uri(tree_graph, seed)
-                seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == link]
+                seed_pattern_objects = set([o for p, o in tree_graph.predicate_objects(subject=seed) if p == link])
+                if link in self.__wrapper.inverses:
+                    inv = self.__wrapper.inverses.get(link)
+                    seed_pattern_objects.update(
+                        set([s for s, p in tree_graph.subject_predicates(object=seed) if p == inv]))
                 next_seeds.update(seed_pattern_objects)
             except KeyboardInterrupt:
                 stop_event.set()
@@ -297,8 +301,11 @@ class PlanExecutor(object):
                 __dereference_uri(tree_graph, seed)
             except:
                 pass
-            seed_pattern_objects = [o for p, o in tree_graph.predicate_objects(subject=seed) if p == pattern_link]
-            return seed_pattern_objects
+            seed_pattern_objects = set([o for p, o in tree_graph.predicate_objects(subject=seed) if p == pattern_link])
+            if pattern_link in self.__wrapper.inverses:
+                inv = self.__wrapper.inverses.get(pattern_link)
+                seed_pattern_objects.update(set([s for s, p in tree_graph.subject_predicates(object=seed) if p == inv]))
+            return list(seed_pattern_objects)
 
         def __check_stop():
             if stop_event.isSet():
@@ -663,17 +670,18 @@ class PlanExecutor(object):
                             __process_link_seed(seed, tree_graph, on_property, next_seeds)
                             next_seeds = set(filter(lambda s: (n, s) not in p, next_seeds))
                             if next_seeds:
-                                print 'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
+                                print u'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
                                 _follow_in_breadth(n, next_seeds, tree_graph, workers_queue, __follow_node,
                                                    PlanExecutor.pool,
                                                    parent=p, cycle=True)
 
                     except (Queue.Full, StopException):
                         stop_event.set()
+                        raise StopException()
                     except Exception as e:
                         traceback.print_exc()
                         log.error(e.message)
-                        raise e
+                        raise StopException()
             finally:
                 if not notified:
                     __notify(queue, seed, found_triples)
