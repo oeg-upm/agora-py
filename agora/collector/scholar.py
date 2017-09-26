@@ -27,6 +27,7 @@ from StringIO import StringIO
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
 from threading import Event, Lock, Thread
+from time import sleep
 
 import networkx as nx
 import redis
@@ -45,7 +46,7 @@ from agora.collector.execution import StopException
 from agora.collector.plan import FilterTree
 from agora.engine.plan.agp import TP, AGP
 from agora.engine.plan.graph import AGORA
-from agora.engine.utils import stopped, Singleton
+from agora.engine.utils import stopped, Singleton, Semaphore
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv, close_kv
 from agora.graph import extract_tps_from_plan, extract_seed_types_from_plan
@@ -139,6 +140,7 @@ class Fragment(object):
         self.__plan = None
         self.__plan_event = Event()
         self.__plan_event.clear()
+        self.__stop_event = Semaphore()
         self.__updated = False
         self.__aborted = False
         self.__tp_map = {}
@@ -333,6 +335,9 @@ class Fragment(object):
             for observer in self.__observers:
                 observer(quad)
 
+    def shutdown(self):
+        self.__stop_event.set()
+
     def populate(self, collector):
         self.collecting = True
         self.stream.clear()
@@ -341,7 +346,7 @@ class Fragment(object):
         n_triples = 0
 
         try:
-            collect_dict = collector.get_fragment_generator(self.agp, filters=self.filters)
+            collect_dict = collector.get_fragment_generator(self.agp, filters=self.filters, stop_event=self.__stop_event)
             generator = collect_dict['generator']
             self.plan = collect_dict['plan']
             self.__aborted = False
@@ -393,6 +398,7 @@ class Fragment(object):
     def remove(self):
         # type: () -> None
         # Clear stream
+        self.__stop_event.set()
         self.stream.clear()
 
         # Remove graph contexts
@@ -466,6 +472,16 @@ class FragmentIndex(object):
 
     def shutdown(self):
         with self.lock:
+            for fragment in self.__fragments.values():
+                fragment.shutdown()
+
+            sleep(1)
+
+            for fragment in self.__fragments.values():
+                fragment.remove()
+
+            self.__fragments.clear()
+
             del FragmentIndex.instances[self.id]
             try:
                 close_kv(self.kv)

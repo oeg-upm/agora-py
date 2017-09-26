@@ -58,7 +58,7 @@ class Semaphore(object):
         return self.value == 1
 
     def set(self):
-        pass
+        self.value = 1
 
 
 def get_immediate_subdirectories(a_dir):
