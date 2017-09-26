@@ -547,12 +547,14 @@ class PlanExecutor(object):
                         spaces = set(self.__wrapper.node_spaces(node))
                         pattern_succ = self.__wrapper.pattern_successors(node)
                         pattern_succ = list(filter(
-                            lambda (n, n_data, e_data): set.intersection(seed_types, e_data.get('expectedType', [])),
+                            lambda (n, n_data, e_data): e_data.get('typeHierarchy', False) or set.intersection(
+                                seed_types, e_data.get('expectedType', [])),
                             pattern_succ))
 
                         link_succ = self.__wrapper.link_successors(node)
                         link_succ = list(filter(
-                            lambda (n, n_data, e_data): set.intersection(seed_types, e_data.get('expectedType', [])),
+                            lambda (n, n_data, e_data): e_data.get('typeHierarchy', False) or set.intersection(
+                                seed_types, e_data.get('expectedType', [])),
                             link_succ))
 
                         space_dict = __process_seed_patterns(seed, pattern_succ, tree_graph)
@@ -649,12 +651,12 @@ class PlanExecutor(object):
                                                         notified = True
                                                     __send_quads(seed, quads, seed_variables, space)
 
-                                                    # if all(predicate_pass.values()):
-                                                    #     candidates = s_dict['candidates']
-                                                    #     seed_variables = s_dict['seed_v']
-                                                    #     quads = __process_candidates(candidates, space)
-                                                    #     s_dict['candidates'] = set()
-                                                    #     __send_quads(seed, quads, seed_variables, space)
+                                                # if all(predicate_pass.values()):
+                                                #     candidates = s_dict['candidates']
+                                                #     seed_variables = s_dict['seed_v']
+                                                #     quads = __process_candidates(candidates, space)
+                                                #     s_dict['candidates'] = set()
+                                                #     __send_quads(seed, quads, seed_variables, space)
 
                             if follow_thread:
                                 follow_thread.join()
@@ -670,7 +672,7 @@ class PlanExecutor(object):
                             __process_link_seed(seed, tree_graph, on_property, next_seeds)
                             next_seeds = set(filter(lambda s: (n, s) not in p, next_seeds))
                             if next_seeds:
-                                print u'entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds)
+                                log.debug(u'Entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds))
                                 _follow_in_breadth(n, next_seeds, tree_graph, workers_queue, __follow_node,
                                                    PlanExecutor.pool,
                                                    parent=p, cycle=True)
