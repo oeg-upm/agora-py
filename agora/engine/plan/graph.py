@@ -251,8 +251,8 @@ def graph_plan(plan, fountain, agp):
             if subject_str not in roots:
                 to_be_extended = False
 
-            if to_be_extended:
-                node_types[res.n] = set([tree_graph.qname(t) for t in tree_graph.objects(res.n, AGORA.expectedType)])
+        if to_be_extended:
+            node_types[res.n] = set([tree_graph.qname(t) for t in tree_graph.objects(res.n, AGORA.expectedType)])
 
                 # if not type_expansion:
                 #     tree_graph.remove((res.n, AGORA.expectedType, None))
