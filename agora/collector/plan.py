@@ -300,10 +300,18 @@ class PlanWrapper(object):
         for c in cycles:
             ext_steps[c] = filter(lambda e: self.__filter_cycle_extensions(c, e),
                                   self.__graph.edges(data=True))
+        source_cycle_map = {}
         for c in cycles:
             c_edges = list(c.edges())
 
             for (u, v, data) in ext_steps[c]:
+                if u not in source_cycle_map:
+                    source_cycle_map[u] = set()
+                if c not in source_cycle_map[u]:
+                    source_cycle_map[u].add(c)
+                else:
+                    continue
+
                 c_root = c.root_node
                 last_node = None
                 for i in range(len(c_edges)):
@@ -431,9 +439,12 @@ class PlanWrapper(object):
     def link_successors(self, node):
         if node not in self.__link_successors:
             successors = self.successors(node)
-            link_succ = filter(lambda (n, n_data, e_data): not n_data.get('byPattern', None) and e_data.get(
+            link_succ = filter(lambda (n, n_data, e_data): e_data.get(
                 'onProperty', None) and not e_data.get(
                 'cycle', False), successors)
+            # link_succ = filter(lambda (n, n_data, e_data): not n_data.get('byPattern', None) and e_data.get(
+            #     'onProperty', None) and not e_data.get(
+            #     'cycle', False), successors)
             self.__link_successors[node] = link_succ
         return self.__link_successors[node]
 
