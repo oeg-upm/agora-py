@@ -26,7 +26,7 @@ import math
 import shutil
 import traceback
 from StringIO import StringIO
-from threading import Thread
+from threading import Thread, Lock as TLock
 from time import sleep
 
 import shortuuid
@@ -60,6 +60,9 @@ class RedisCache(object):
         self.__resource_cache = get_triple_store()
         self._r = get_kv(persist_mode, redis_host, redis_port, redis_db, redis_file, base=base, path=path)
         self.__lock = Lock(self._r, key_prefix)
+        self.__mlock = TLock()
+        self.__memory_graphs = {}
+        self.__memory_order = []
 
         self.__resources_ts = {}
 
@@ -133,6 +136,7 @@ class RedisCache(object):
                             with self.uri_lock(uri):
                                 try:
                                     self._r.hdel(gids_key, uri)
+                                    self.__forget(uri)
                                 except Exception:
                                     traceback.print_exc()
                                     log.error('Purging resource {}'.format(uri))
@@ -142,6 +146,35 @@ class RedisCache(object):
                 log.error(e.message)
                 self.__enabled = False
             sleep(10)
+
+    def __memoize(self, key, graph):
+        with self.__mlock:
+            if len(self.__memory_order) >= 5000:
+                old_key = self.__memory_order.pop(0)
+                if old_key in self.__memory_graphs:
+                    del self.__memory_graphs[old_key]
+
+            self.__memory_order.append(key)
+            self.__memory_graphs[key] = graph
+
+    def __recall(self, key):
+        with self.__mlock:
+            return self.__memory_graphs[key]
+
+    def __forget(self, key):
+        with self.__mlock:
+            try:
+                if key in self.__memory_graphs:
+                    del self.__memory_graphs[key]
+                    self.__memory_order.remove(key)
+            except:
+                pass
+            
+    def release_locks(self):
+        with self.__lock:
+            lock_keys = self._r.keys('{}:l:*'.format(self.__key_prefix))
+            for k in lock_keys:
+                self._r.delete()
 
     def create(self, conjunctive=False, gid=None, loader=None, format=None):
         if conjunctive:
@@ -167,9 +200,14 @@ class RedisCache(object):
                     ttl_dt = dt.utcfromtimestamp(int(ttl_ts))
                     now = dt.utcnow()
                     if ttl_dt > now:
+                        try:
+                            g = self.__recall(gid)
+                        except KeyError:
+                            source = self._r.hget(gid_key, 'data')
+                            g.parse(StringIO(source), format=format)
+                            self.__memoize(gid, g)
+
                         ttl = math.ceil((ttl_dt - dt.utcnow()).total_seconds())
-                        source = self._r.hget(gid_key, 'data')
-                        g.parse(StringIO(source), format=format)
                         return g, math.ceil(ttl)
 
                 log.debug('Caching {}'.format(gid))
@@ -191,6 +229,8 @@ class RedisCache(object):
                     #     source.remove((None, None, URIRef(gid)))
                     data = source.serialize(format='turtle')
                     g.__iadd__(source)
+
+                self.__memoize(gid, g)
 
                 if not self.__force_cache_time:
                     ttl = extract_ttl(headers) or ttl
