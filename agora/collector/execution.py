@@ -133,21 +133,21 @@ def _follow_in_breadth(n, next_seeds, tree_graph, workers, follow, pool, parent=
     try:
         threads = []
         for s in next_seeds:
-            try:
-                workers.put_nowait(s)
-                future = pool.submit(follow, n, s, tree_graph, parent=parent, queue=queue)
-                threads.append(future)
-            except Queue.Full:
-                # If all threads are busy...I'll do it myself
-                follow(n, s, tree_graph, parent=parent, queue=queue, cycle=cycle)
+            # try:
+            #     workers.put_nowait(s)
+            #     future = pool.submit(follow, n, s, tree_graph, parent=parent, queue=queue)
+            #     threads.append(future)
+            # except Queue.Full:
+            # If all threads are busy...I'll do it myself
+            follow(n, s, tree_graph, parent=parent, queue=queue, cycle=cycle)
 
-        if len(threads) >= workers:
-            wait(threads)
-            [(workers.get_nowait(), workers.task_done()) for _ in threads]
-            threads = []
-
-        wait(threads)
-        [(workers.get_nowait(), workers.task_done()) for _ in threads]
+        # if len(threads) >= workers:
+        #     wait(threads)
+        #     [(workers.get_nowait(), workers.task_done()) for _ in threads]
+        #     threads = []
+        #
+        # wait(threads)
+        # [(workers.get_nowait(), workers.task_done()) for _ in threads]
         next_seeds.clear()
     except (IndexError, KeyError):
         traceback.print_exc()
@@ -283,11 +283,11 @@ class PlanExecutor(object):
             __check_stop()
             try:
                 __dereference_uri(tree_graph, seed)
-                seed_pattern_objects = set([o for p, o in tree_graph.predicate_objects(subject=seed) if p == link])
+                seed_pattern_objects = set(tree_graph.objects(seed, link))
                 if link in self.__wrapper.inverses:
                     inv = self.__wrapper.inverses.get(link)
                     seed_pattern_objects.update(
-                        set([s for s, p in tree_graph.subject_predicates(object=seed) if p == inv]))
+                        set(tree_graph.subjects(inv, seed)))
                 next_seeds.update(seed_pattern_objects)
             except KeyboardInterrupt:
                 stop_event.set()
@@ -301,10 +301,10 @@ class PlanExecutor(object):
                 __dereference_uri(tree_graph, seed)
             except:
                 pass
-            seed_pattern_objects = set([o for p, o in tree_graph.predicate_objects(subject=seed) if p == pattern_link])
+            seed_pattern_objects = set(tree_graph.objects(seed, pattern_link))
             if pattern_link in self.__wrapper.inverses:
                 inv = self.__wrapper.inverses.get(pattern_link)
-                seed_pattern_objects.update(set([s for s, p in tree_graph.subject_predicates(object=seed) if p == inv]))
+                seed_pattern_objects.update(set(tree_graph.predicates(inv, seed)))
             return list(seed_pattern_objects)
 
         def __check_stop():
@@ -420,6 +420,13 @@ class PlanExecutor(object):
 
             return candidates
 
+        def __join_space_dicts(a, b):
+            ab = {'candidates': a['candidates'].union(b['candidates']),
+                  'seed_v': a['seed_v'].union(b['seed_v']),
+                  'patterns': a['patterns'].union(b['patterns'])
+                  } if a else b
+            return ab
+
         def __process_seed_patterns(seed, p_nodes, graph):
             space_dict = {}
             seed_v_pass = {}
@@ -433,7 +440,7 @@ class PlanExecutor(object):
                     seed_v = set()
                     candidates = set()
                     ef_patterns = set()
-                    space_dict[space] = {
+                    node_space_dict = {
                         'candidates': candidates,
                         'seed_v': seed_v,
                         'patterns': ef_patterns
@@ -452,6 +459,8 @@ class PlanExecutor(object):
                         else:
                             seed_v_pass[tp.s] = False
                             self.__wrapper.filter(seed, space, tp.s)
+
+                    space_dict[space] = __join_space_dicts(space_dict.get(space, {}), node_space_dict)
 
             if not all(seed_v_pass.items()):
                 return {}
@@ -651,12 +660,12 @@ class PlanExecutor(object):
                                                         notified = True
                                                     __send_quads(seed, quads, seed_variables, space)
 
-                                                # if all(predicate_pass.values()):
-                                                #     candidates = s_dict['candidates']
-                                                #     seed_variables = s_dict['seed_v']
-                                                #     quads = __process_candidates(candidates, space)
-                                                #     s_dict['candidates'] = set()
-                                                #     __send_quads(seed, quads, seed_variables, space)
+                                                    # if all(predicate_pass.values()):
+                                                    #     candidates = s_dict['candidates']
+                                                    #     seed_variables = s_dict['seed_v']
+                                                    #     quads = __process_candidates(candidates, space)
+                                                    #     s_dict['candidates'] = set()
+                                                    #     __send_quads(seed, quads, seed_variables, space)
 
                             if follow_thread:
                                 follow_thread.join()
@@ -670,9 +679,10 @@ class PlanExecutor(object):
                             p = parent[:]
                             on_property = e_data.get('onProperty', None)
                             __process_link_seed(seed, tree_graph, on_property, next_seeds)
-                            next_seeds = set(filter(lambda s: (n, s) not in p, next_seeds))
+                            next_seeds = set(
+                                filter(lambda s: (n, s) not in p and (n, s) not in self.__node_seeds, next_seeds))
                             if next_seeds:
-                                log.debug(u'Entering cycle: {} -> {} -> {}'.format(seed, on_property, next_seeds))
+                                log.debug(u'Entering cycle: {} -> {} -> {}'.format(seed, on_property, len(next_seeds)))
                                 _follow_in_breadth(n, next_seeds, tree_graph, workers_queue, __follow_node,
                                                    PlanExecutor.pool,
                                                    parent=p, cycle=True)
