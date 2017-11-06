@@ -36,7 +36,7 @@ __author__ = 'Fernando Serena'
 log = logging.getLogger('agora.engine.plan')
 
 
-def _root_types(fountain, root_tps, graph):
+def find_root_types(fountain, root_tps, graph):
     root_types = {}
     roots_dict = {}
     for (s, p, o) in root_tps:
@@ -71,7 +71,7 @@ def _validate_agp_context(fountain, c):
             continue
         if (s, pr, o) not in s_join_tested:
             s_join = [(x, pj, y) for (x, pj, y) in c.triples((s, None, None)) if pj != pr]
-            root_types = _root_types(fountain, s_join + [(s, pr, o)], c)
+            root_types = find_root_types(fountain, s_join + [(s, pr, o)], c)
             s_join_tested.append((s, pr, o))
             if not root_types:
                 raise TypeError('bad subject join')
@@ -183,7 +183,7 @@ def _get_tp_paths(fountain, agp, force_seed=None):
     for c in graph.contexts():
         root_tps = filter(lambda (s, pr, o): str(s).replace('?', '') in str_roots, c.triples((None, None, None)))
 
-        root_types = _root_types(fountain, root_tps, c)
+        root_types = find_root_types(fountain, root_tps, c)
         root_types = {_subject_transform(tp[0]): types for tp, types in root_types.items()}
 
         for tp in agp:
