@@ -3,7 +3,7 @@
   Ontology Engineering Group
         http://www.oeg-upm.net/
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
-  Copyright (C) 2016 Ontology Engineering Group.
+  Copyright (C) 2017 Ontology Engineering Group.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ def _type_subtree(fountain, t):
 def _inform_on_inverses(plan_graph, fountain, prefixes):
     predicates = set(plan_graph.objects(predicate=AGORA.onProperty))
     predicates.update(set(plan_graph.objects(predicate=AGORA.predicate)))
-    for p in predicates:
+    for p in filter(lambda p: str(RDF) not in p, predicates):
         qp = plan_graph.qname(p)
         try:
             p_dict = fountain.get_property(qp)
@@ -145,11 +145,15 @@ def graph_plan(plan, fountain, agp):
             if p_pred == RDF.type:
                 p_type = list(plan_graph.objects(p_node, AGORA.object)).pop()
                 if isinstance(p_type, URIRef):
-                    for et in expected_types:
-                        if et == p_type:
-                            q_expected_types = _type_subtree(fountain, tree_graph.qname(et))
-                            for et_q in q_expected_types:
-                                tree_graph.add((res.n, AGORA.expectedType, __extend_uri(prefixes, et_q)))
+                    for et in [et for et in expected_types if et == p_type]:
+                        q_expected_types = _type_subtree(fountain, tree_graph.qname(et))
+                        for et_q in q_expected_types:
+                            tree_graph.add((res.n, AGORA.expectedType, __extend_uri(prefixes, et_q)))
+            else:
+                for et in expected_types:
+                    q_expected_types = _type_subtree(fountain, tree_graph.qname(et))
+                    for et_q in q_expected_types:
+                        tree_graph.add((res.n, AGORA.expectedType, __extend_uri(prefixes, et_q)))
 
     def apply_cycle_extensions(c_roots, node_types):
         for c_id, root_types in c_roots.items():
@@ -183,22 +187,32 @@ def graph_plan(plan, fountain, agp):
         previous_node = b_tree
         inc_tree_length(b_tree, len(p_steps))
 
+        root_index = -1
+        pp = []
         for j, step in enumerate(p_steps):
             prop = step.get('property')
+            pp.append(prop)
+            path_root = step.get('root', None)
+            if path_root and root_index < 0:
+                root_index = j
+            base_id = path_root or b_tree
+            base_id += '/'
+
             if j < len(p_steps) - 1 or (pattern[1] == RDF.type and isinstance(pattern[2], URIRef)):
-                b_node = BNode(previous_node.n3() + '/' + prop)
+                b_node = BNode(base_id + '/'.join(pp))
                 tree_graph.add((b_node, AGORA.onProperty, __extend_uri(prefixes, prop)))
             else:
-                # b_node = BNode(previous_node.n3() + '/#end')
-                b_node = BNode(previous_node.n3() + '/' + prop)
+                b_node = BNode(base_id + '/'.join(pp))
+
             tree_graph.add((b_node, AGORA.expectedType, __extend_uri(prefixes, step.get('type'))))
             tree_graph.add((previous_node, AGORA.next, b_node))
             previous_node = b_node
 
         p_node = _get_pattern_node(pattern, patterns)
         if pattern[1] == RDF.type and isinstance(pattern[2], URIRef):
-            b_id = previous_node.n3()
-            b_id += '/#end'
+            b_id = '{}_{}_{}'.format(pattern[0].n3(plan_graph.namespace_manager),
+                                     pattern[1].n3(plan_graph.namespace_manager),
+                                     pattern[2].n3(plan_graph.namespace_manager))
 
             b_node = BNode(b_id)
             tree_graph.add((b_node, AGORA.expectedType, pattern[2]))
