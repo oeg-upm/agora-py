@@ -81,8 +81,12 @@ def __extract_type(schema, r, t, vid):
             pipe.sadd('vocabs:{}:types:{}:sub'.format(vid, t), s)
         for s in schema.get_type_properties(t):
             pipe.sadd('vocabs:{}:types:{}:props'.format(vid, t), s)
+        for s in schema.get_type_specific_properties(t):
+            pipe.sadd('vocabs:{}:types:{}:s-props'.format(vid, t), s)
         for s in schema.get_type_references(t):
             pipe.sadd('vocabs:{}:types:{}:refs'.format(vid, t), s)
+        for s in schema.get_type_specific_references(t):
+            pipe.sadd('vocabs:{}:types:{}:s-refs'.format(vid, t), s)
         pipe.execute()
 
 
@@ -257,7 +261,6 @@ def _get_property(r, prop):
     inv = reduce(set.union, __get_by_pattern(r, '*:properties:{}:_inverse'.format(prop), r.smembers), set([]))
     cons = reduce(set.union, __get_by_pattern(r, '*:properties:{}:_cons'.format(prop), r.smembers), set([]))
     cons = map(lambda x: eval(x), cons)
-
     if len(inv):
         inverse_dr = [(get_inverse_domain(i), get_inverse_range(i)) for i in inv]
         for dom, ra in inverse_dr:
@@ -279,12 +282,14 @@ def _get_property(r, prop):
 
 def _is_property(r, prop):
     # type: (redis.StrictRedis, str) -> bool
-    return bool(len(r.keys('*:properties:{}:*'.format(prop))))
+    all_prop_keys = r.keys('*:properties')
+    return bool(filter(lambda k: r.sismember(k, prop), all_prop_keys))
 
 
 def _is_type(r, ty):
     # type: (redis.StrictRedis, str) -> bool
-    return bool(len(r.keys('*:types:{}:*'.format(ty))))
+    all_type_keys = r.keys('*:types')
+    return bool(filter(lambda k: r.sismember(k, ty), all_type_keys))
 
 
 def _get_type(r, ty):
@@ -296,12 +301,16 @@ def _get_type(r, ty):
     super_types = reduce(set.union, __get_by_pattern(r, '*:types:{}:super'.format(ty), r.smembers), set([]))
     sub_types = reduce(set.union, __get_by_pattern(r, '*:types:{}:sub'.format(ty), r.smembers), set([]))
     type_props = reduce(set.union, __get_by_pattern(r, '*:types:{}:props'.format(ty), r.smembers), set([]))
+    type_s_props = reduce(set.union, __get_by_pattern(r, '*:types:{}:s-props'.format(ty), r.smembers), set([]))
     type_refs = reduce(set.union, __get_by_pattern(r, '*:types:{}:refs'.format(ty), r.smembers), set([]))
+    type_s_refs = reduce(set.union, __get_by_pattern(r, '*:types:{}:s-refs'.format(ty), r.smembers), set([]))
 
     return {'super': list(super_types),
             'sub': list(sub_types),
             'properties': list(type_props),
-            'refs': list(type_refs)}
+            'spec_properties': list(type_s_props),
+            'refs': list(type_refs),
+            'spec_refs': list(type_s_refs)}
 
 
 def _cached(f):
@@ -365,3 +374,6 @@ class Index(object):
 
     def index_vocabulary(self, vid):
         return _extract_vocabulary(self.__schema, self.__r, vid)
+
+    def delete_vocabulary(self, vid):
+        return _delete_vocabulary(self.__r, vid)
