@@ -66,3 +66,34 @@ def get_immediate_subdirectories(a_dir):
         os.makedirs(a_dir)
     return [name for name in os.listdir(a_dir)
             if os.path.isdir(os.path.join(a_dir, name))]
+
+
+class Wrapper(object):
+    def __init__(self, object):
+        self.__object = object
+        self.__argret = {}
+
+    def decorate(self, f):
+        def wrapper(*args, **kwargs):
+            ret = None
+            if kwargs or args not in self.__argret:
+                ret = f(*args, **kwargs)
+
+            if kwargs:
+                return ret
+
+            if ret is not None:
+                self.__argret[args] = ret
+            return self.__argret.get(args, None)
+
+        return wrapper
+
+    def __getattr__(self, item):
+        if item not in self.__argret:
+            attr = self.__object.__getattribute__(item)
+            if hasattr(attr, '__call__'):
+                return self.decorate(attr)
+            else:
+                self.__argret[item] = attr
+
+        return self.__argret[item]
