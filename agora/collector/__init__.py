@@ -22,16 +22,15 @@ import logging
 import re
 from abc import abstractmethod
 
-from agora.collector.cache import RedisCache
-
-from agora.engine.plan.graph import AGORA
 from rdflib import BNode
 from rdflib import Literal
 from rdflib import URIRef
+from shortuuid import uuid
 
+from agora.collector.cache import RedisCache
 from agora.collector.execution import PlanExecutor
 from agora.engine.plan.agp import AGP
-from shortuuid import uuid
+from agora.engine.plan.graph import AGORA
 
 __author__ = "Fernando Serena"
 
@@ -99,12 +98,15 @@ class Collector(AbstractCollector):
                 force_seed_tuples.append((URIRef('http://{}'.format(uuid())), ty))
         plan = self.__planner.make_plan(agp, force_seed=force_seed_tuples)
 
+        seed_triples_to_remove = set()
         for s, ty in force_seed_tuples:
             trees = list(plan.subjects(predicate=AGORA.hasSeed, object=s))
             for t in trees:
-                plan.remove((t, AGORA.hasSeed, s))
+                seed_triples_to_remove.add((t, AGORA.hasSeed, s))
                 for actual_s in self.__force_seed[ty]:
                     plan.add((t, AGORA.hasSeed, actual_s))
+        for t in seed_triples_to_remove:
+            plan.remove(t)
 
         executor = PlanExecutor(plan)
 
