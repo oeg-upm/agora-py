@@ -26,20 +26,21 @@ import math
 import shutil
 import traceback
 from StringIO import StringIO
+from datetime import datetime as dt, timedelta as delta
 from threading import Thread, Lock as TLock
 from time import sleep
 
 import shortuuid
+from concurrent.futures import ThreadPoolExecutor
+from rdflib import ConjunctiveGraph
+from rdflib.graph import Graph
+from redis.lock import Lock
+
 from agora.collector.execution import parse_rdf
 from agora.collector.http import http_get, extract_ttl
 from agora.engine.utils import stopped, get_immediate_subdirectories
 from agora.engine.utils.graph import get_triple_store
 from agora.engine.utils.kv import get_kv
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime as dt, timedelta as delta
-from rdflib import ConjunctiveGraph, URIRef
-from rdflib.graph import Graph
-from redis.lock import Lock
 
 __author__ = 'Fernando Serena'
 
@@ -169,7 +170,7 @@ class RedisCache(object):
                     self.__memory_order.remove(key)
             except:
                 pass
-            
+
     def release_locks(self):
         with self.__lock:
             lock_keys = self._r.keys('{}:l:*'.format(self.__key_prefix))
@@ -220,14 +221,13 @@ class RedisCache(object):
 
                 ttl = self.__min_cache_time
                 source, headers = response
-                if not isinstance(source, Graph):
+                if not isinstance(source, Graph) and not isinstance(source, ConjunctiveGraph):
                     parse_rdf(g, source, format, headers)
-                    # g.remove((None, None, URIRef(gid)))
                     data = g.serialize(format='turtle')
                 else:
-                    # if g != source:
-                    #     source.remove((None, None, URIRef(gid)))
                     data = source.serialize(format='turtle')
+                    for prefix, ns in source.namespaces():
+                        g.bind(prefix, ns)
                     g.__iadd__(source)
 
                 self.__memoize(gid, g)
