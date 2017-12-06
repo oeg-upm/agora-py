@@ -18,37 +18,21 @@
   limitations under the License.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
-from rdflib.plugins.sparql.algebra import translateQuery
-from rdflib.plugins.sparql.parser import parseQuery
-
-from agora.graph.incremental import incremental_eval_bgp
-
-"""
-These method recursively evaluate the SPARQL Algebra
-
-evalQuery is the entry-point, it will setup context and
-return the SPARQLResult object
-
-evalPart is called on each level and will delegate to the right method
-
-A rdflib.plugins.sparql.sparql.QueryContext is passed along, keeping
-information needed for evaluation
-
-A list of dicts (solution mappings) is returned, apart from GroupBy which may
-also return a dict of list of dicts
-
-"""
-
 import collections
+import traceback
 
 from rdflib import Variable, Graph, BNode, URIRef, Literal
 from rdflib.plugins.sparql import CUSTOM_EVALS
 from rdflib.plugins.sparql.aggregates import evalAgg
+from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.evalutils import (
     _eval, _join, _minus, _fillTemplate, _ebv)
+from rdflib.plugins.sparql.parser import parseQuery
 from rdflib.plugins.sparql.parserutils import value, Expr
 from rdflib.plugins.sparql.sparql import (
     QueryContext, AlreadyBound, FrozenBindings, SPARQLError)
+
+from agora.graph.incremental import incremental_eval_bgp
 
 
 def collect_bgp_fragment(ctx, bgp):
@@ -113,6 +97,7 @@ def evalBGP(ctx, bgp):
                 yielded.append({unicode(k): unicode(x[k]) for k in x})
                 yield x
         except Exception:
+            traceback.print_exc()
             pass
     else:
         collect_bgp_fragment(ctx, bgp)
@@ -592,26 +577,6 @@ def extract_bgps(query, prefixes):
     for bgp in bgps:
         yield bgp, {v: filters[v] for v in bgp._vars if v in filters}
 
-        # while part:
-        #     if part.name == 'Filter':
-        #         for v, f in discriminate_filters(part.expr):
-        #             if v not in filters:
-        #                 filters[v] = set([])
-        #             filters[v].add(f)
-        #     if part.name == 'BGP':
-        #         bgps.append(part)
-        #     else:
-        #         if hasattr(part, 'p1') and part.p1 is not None:
-        #             bgps.append(part.p1)
-        #         if hasattr(part, 'p2') and part.p2 is not None:
-        #             bgps.append(part.p2)
-        #     part = part.p
-        #
-        # print filters
-        #
-        # for bgp in bgps:
-        #     yield bgp
-
 
 def evalQuery(graph, query, initBindings, base=None, incremental=True, **kwargs):
     ctx = AgoraQueryContext(graph=graph, incremental=incremental, **kwargs)
@@ -623,7 +588,6 @@ def evalQuery(graph, query, initBindings, base=None, incremental=True, **kwargs)
             if not isinstance(k, Variable):
                 k = Variable(k)
             ctx[k] = v
-            # ctx.push()  # nescessary?
 
     main = query.algebra
 
