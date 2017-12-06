@@ -3,7 +3,7 @@
   Ontology Engineering Group
         http://www.oeg-upm.net/
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
-  Copyright (C) 2016 Ontology Engineering Group.
+  Copyright (C) 2017 Ontology Engineering Group.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -87,7 +87,7 @@ def __base_generator(agp, ctx, fragment):
                       isinstance(tp.s, Variable) != isinstance(tp.o, Variable)]
 
     wire = agp.wire
-    ignore_tps = [str(tp) for (tp, v) in tp_single_vars if len(wire.neighbors(v)) > 1]
+    ignore_tps = [str(tp) for (tp, v) in tp_single_vars if len(list(wire.neighbors(v))) > 1]
     for tp, ss, _, so in fragment:
         if ctx.stop is not None:
             if ctx.stop.isSet():
@@ -133,8 +133,6 @@ def common_descendants(graph, x, c, base):
             for dc in nx.descendants(graph, x):
                 if dx.map == dc.map:
                     return True
-                    # if graph.out_degree(dx) > 0:
-                    #     return True
     except Exception as e:
         # print e.message
         raise e
@@ -199,13 +197,14 @@ def __query_context(ctx, c):
 
 def __generate(data):
     queue, agp, ctx, generator = data['queue'], data['agp'], data['context'], data['gen']
-    for c, tp in __base_generator(agp, ctx, generator):
-        queue.put((c, tp))
-        if ctx.stop is not None:
-            if ctx.stop.value > 0:
-                break
-
-    data['collecting'] = False
+    try:
+        for c, tp in __base_generator(agp, ctx, generator):
+            queue.put((c, tp))
+            if ctx.stop is not None:
+                if ctx.stop.value > 0:
+                    break
+    finally:
+        data['collecting'] = False
 
 
 def incremental_eval_bgp(ctx, bgp):
@@ -258,7 +257,7 @@ def incremental_eval_bgp(ctx, bgp):
                     if ctx.stop.isSet():
                         raise StopIteration()
                 try:
-                    c, tp = queue.get(timeout=1.0)
+                    c, tp = queue.get(timeout=0.01)
                     if len(dgraph.nodes()) > 5000:
                         break
                     [dgraph.add_edge(v, c) for v in c.variables]
