@@ -3,7 +3,7 @@
   Ontology Engineering Group
         http://www.oeg-upm.net/
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
-  Copyright (C) 2016 Ontology Engineering Group.
+  Copyright (C) 2017 Ontology Engineering Group.
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -19,31 +19,25 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import logging
+import signal
 
-from agora.engine.fountain.seed import SeedManager
-
-from agora.engine.fountain.path import PathManager
-
-from agora.engine.utils.kv import get_kv, close
-
-from agora.engine.utils.graph import get_cached_triple_store
-
-from agora.engine.fountain.index import Index
-
-from agora.engine.fountain.schema import Schema
+from rdflib import Graph
 
 from agora.collector import Collector
 from agora.collector.cache import RedisCache
 from agora.engine.fountain import Fountain
+from agora.engine.fountain.index import Index
+from agora.engine.fountain.path import PathManager
+from agora.engine.fountain.schema import Schema
+from agora.engine.fountain.seed import SeedManager
 from agora.engine.plan import Planner, AbstractPlanner
+from agora.engine.utils import stopped
+from agora.engine.utils.graph import get_cached_triple_store
+from agora.engine.utils.kv import get_kv, close
 from agora.graph import AgoraGraph
 from agora.server.fountain import FountainClient
 from agora.server.fountain import client as fc
 from agora.server.planner import client as pc
-from agora.engine.utils import stopped
-from rdflib import Graph
-import signal
-import sys
 
 __author__ = 'Fernando Serena'
 
@@ -149,25 +143,26 @@ class Agora(object):
 
     def __new__(cls, **kwargs):
         a = super(Agora, cls).__new__(cls)
-        kv = get_kv(**kwargs)
-        schema = Schema()
-        schema.graph = get_cached_triple_store(schema.cache, **kwargs)
-        index = Index()
-        index.r = kv
-        index.schema = schema
-        sm = SeedManager()
-        sm.index = index
-        pm = PathManager()
-        pm.index = index
-        pm.seed_manager = sm
+        if kwargs:
+            kv = get_kv(**kwargs)
+            schema = Schema()
+            schema.graph = get_cached_triple_store(schema.cache, **kwargs)
+            index = Index()
+            index.r = kv
+            index.schema = schema
+            sm = SeedManager()
+            sm.index = index
+            pm = PathManager()
+            pm.index = index
+            pm.seed_manager = sm
 
-        fountain = Fountain()
-        fountain.schema = schema
-        fountain.index = index
-        fountain.seed_manager = sm
-        fountain.path_manager = pm
-        planner = Planner(fountain)
-        a.planner = planner
+            fountain = Fountain()
+            fountain.schema = schema
+            fountain.index = index
+            fountain.seed_manager = sm
+            fountain.path_manager = pm
+            planner = Planner(fountain)
+            a.planner = planner
 
         return a
 
