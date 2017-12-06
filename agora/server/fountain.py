@@ -19,11 +19,17 @@
 #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=#
 """
 import logging
+from threading import Lock
+
+from flask import request
+from rdflib import URIRef
+from shortuuid import uuid
 
 from agora.engine.fountain import AbstractFountain
 from agora.engine.fountain.onto import VocabularyNotFound, DuplicateVocabulary, VocabularyError
 from agora.engine.fountain.seed import InvalidSeedError, DuplicateSeedError
-from agora.server import Server, APIError, Conflict, TURTLE, NotFound, Client, HTML
+from agora.server import Server, APIError, Conflict, TURTLE, NotFound, Client, HTML, tuples_force_seed, JSON, \
+    dict_force_seed
 
 __author__ = 'Fernando Serena'
 
@@ -53,6 +59,10 @@ def build(fountain, server=None, import_name=__name__):
     @server.get('/prefixes')
     def prefixes():
         return fountain.prefixes
+
+    @server.post('/prefixes')
+    def add_prefixes(prefixes):
+        fountain.add_prefixes(prefixes)
 
     @server.get('/types/<string:type>')
     def get_type(type):
@@ -88,8 +98,18 @@ def build(fountain, server=None, import_name=__name__):
 
     @server.get('/paths/<string:elm>')
     def get_paths(elm):
+        force_seed = request.args.getlist('force_seed', None)
+        force_seed = None if not force_seed else map(lambda x: ('http://{}'.format(uuid()), x), force_seed)
         try:
-            return fountain.get_paths(elm)
+            return fountain.get_paths(elm, force_seed=force_seed)
+        except TypeError, e:
+            raise APIError(e.message)
+
+    @server.post('/paths', produce_types=(JSON,), consume_types=(JSON,))
+    def get_paths_force_seeds(req_json):
+        force_seed = list(tuples_force_seed(req_json['force_seed']))
+        try:
+            return fountain.get_paths(req_json['elm'], force_seed=force_seed)
         except TypeError, e:
             raise APIError(e.message)
 
@@ -158,6 +178,8 @@ class FountainClient(Client, AbstractFountain):
         super(FountainClient, self).__init__(host, port)
         self.__types = {}
         self.__properties = {}
+        self.__prefixes = {}
+        self.__lock = Lock()
 
     @property
     def properties(self):
@@ -174,14 +196,26 @@ class FountainClient(Client, AbstractFountain):
 
     @property
     def prefixes(self):
-        response = self._get_request('prefixes')
-        return response
+        prefixes_raw = self._get_request('prefixes')
+        return {prefix: URIRef(prefixes_raw[prefix]) for prefix in prefixes_raw}
+
+    def add_prefixes(self, prefixes):
+        self._post_request('/prefixes', data=prefixes, content_type='application/json')
 
     def update_vocabulary(self, vid, owl):
-        raise NotImplementedError
+        response = self._put_request('vocabs/{}'.format(vid), owl)
+        return response
 
-    def get_paths(self, elm):
-        response = self._get_request('paths/{}'.format(elm))
+    def get_paths(self, elm, force_seed=None):
+        if force_seed:
+            url = 'paths'
+            type_seed_dict = dict_force_seed(force_seed)
+            req_json = {'elm': str(elm), 'force_seed': type_seed_dict}
+            response = self._post_request(url, req_json, content_type='application/json', accept='application/json')
+        else:
+            url = 'paths/{}' % elm
+            response = self._get_request(url, accept='application/json')
+
         return response
 
     @property
@@ -190,24 +224,26 @@ class FountainClient(Client, AbstractFountain):
         return response
 
     def delete_type_seeds(self, type):
-        raise NotImplementedError
+        response = self._delete_request('seeds/{}'.format(type))
+        return response
 
     def get_property(self, property):
-        if property not in self.__properties:
-            self.__properties[property] = self._get_request('properties/{}'.format(property))
-
-        return self.__properties[property]
+        try:
+            return self._get_request('properties/{}'.format(property))
+        except IOError as e:
+            raise TypeError(e.message['text'])
 
     def get_vocabulary(self, vid):
-        raise NotImplementedError
+        return self._get_request('vocabs/{}'.format(vid), accept='text/turtle')
 
     def delete_vocabulary(self, vid):
-        raise NotImplementedError
+        return self._delete_request('vocabs/{}'.format(vid))
 
     def get_type(self, type):
-        if type not in self.__types:
-            self.__types[type] = self._get_request('types/{}'.format(type))
-        return self.__types[type]
+        try:
+            return self._get_request('types/{}'.format(type))
+        except IOError as e:
+            raise TypeError(e.message['text'])
 
     @property
     def types(self):
@@ -216,7 +252,8 @@ class FountainClient(Client, AbstractFountain):
 
     @property
     def vocabularies(self):
-        raise NotImplementedError
+        response = self._get_request('vocabs')
+        return response
 
     def add_seed(self, uri, type):
         response = self._post_request('seeds',
@@ -224,6 +261,18 @@ class FountainClient(Client, AbstractFountain):
                                        'type': type},
                                       content_type='application/json')
         return response
+
+    def connected(self, source, target):
+        url = 'paths/{}'.format(target)
+        url += '?force_seed={}'.format(source)
+        response = self._get_request(url)
+        paths = response.get('paths', [])
+        if len(paths) == 1:
+            path = paths.pop()
+            connected = path['cycles'] or path['steps']
+        else:
+            connected = len(paths) > 1
+        return bool(connected)
 
     def delete_seed(self, sid):
         raise NotImplementedError
@@ -233,8 +282,13 @@ class FountainClient(Client, AbstractFountain):
         return response
 
     def add_vocabulary(self, owl):
-        response = self._post_request('vocabs', owl)
-        return response
+        try:
+            response = self._post_request('vocabs', owl)
+            return response
+        except IOError as e:
+            if e.message['code'] == 409:
+                raise DuplicateVocabulary(e.message['text'])
+            raise e
 
 
 def client(host='localhost', port=5000):
