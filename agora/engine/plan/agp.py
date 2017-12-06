@@ -144,9 +144,9 @@ class AGP(set):
         cycle_elms = list(nx.simple_cycles(w))
         if cycle_elms:
             cycle_elms = set.union(*map(lambda x: set(x), list(nx.simple_cycles(w))))
-        in_deg = list(w.in_degree_iter())
+        in_deg = list(w.in_degree())
         min_in = min(map(lambda x: x[1], in_deg)) if in_deg else 0
-        roots = map(lambda x: x[0], filter(filter_root, list(w.in_degree_iter())))
+        roots = map(lambda x: x[0], filter(filter_root, list(w.in_degree())))
         return roots
 
     def __nodify(self, elm, variables):
