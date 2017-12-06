@@ -21,7 +21,7 @@
 import logging
 
 from rdflib import URIRef, BNode, Graph
-from rdflib.namespace import RDFS, NamespaceManager
+from rdflib.namespace import RDFS, OWL, NamespaceManager
 
 from agora.engine.utils.cache import Cache, ContextGraph, cached
 
@@ -49,6 +49,8 @@ def __q_name(ns, term):
 
 def __query(graph, q):
     # type: (Graph, str) -> set
+    graph.namespace_manager.bind('rdfs', RDFS, replace=True, override=True)
+    graph.namespace_manager.bind('owl', OWL, replace=True, override=True)
     result = graph.query(q)
     return set([__q_name(graph.namespace_manager, x) for x in __flat_slice(result)])
 
@@ -80,6 +82,8 @@ def _contexts(graph):
 def _update_context(graph, vid, g):
     # type: (ContextGraph, str, Graph) -> None
     context = graph.get_context(vid)
+    if isinstance(context, SchemaGraph):
+        context = context.g
     graph.remove_context(context)
     _add_context(graph, vid, g)
 
@@ -87,6 +91,8 @@ def _update_context(graph, vid, g):
 def _remove_context(graph, vid):
     # type: (ContextGraph, str) -> None
     context = graph.get_context(vid)
+    if isinstance(context, SchemaGraph):
+        context = context.g
     graph.remove_context(context)
 
 
@@ -97,22 +103,29 @@ def _get_context(graph, vid):
 
 def _add_context(graph, vid, g):
     # type: (ContextGraph, str, Graph) -> None
+    def match_ns(term):
+        filter_ns = [ns for ns in rev_ns if ns in term]
+        if filter_ns:
+            ns = filter_ns.pop()
+            if rev_ns[ns]:
+                vid_context.bind(rev_ns[ns], ns)
+            del rev_ns[ns]
+
+    rev_ns = {ns: prefix for prefix, ns in g.namespaces() if not ns.startswith('ns')}
     vid_context = graph.get_context(vid)
-    for t in g.triples((None, None, None)):
-        vid_context.add(t)
+    for s, p, o in g.triples((None, None, None)):
+        if o != OWL.Ontology:
+            match_ns(s)
+            match_ns(p)
+            match_ns(o)
+        vid_context.add((s, p, o))
 
-    for (p, u) in g.namespaces():
-        if p != '':
-            vid_context.bind(p, u)
 
-
-# @__context
 def _prefixes(graph):
     # type: (Graph) -> dict
     return dict(graph.namespaces())
 
 
-# @__context
 def _get_types(graph):
     # type: (Graph) -> set
     return __query(graph,
@@ -155,7 +168,6 @@ def _get_types(graph):
                       }""")
 
 
-# @__context
 def _get_properties(graph):
     # type: (Graph) -> set
     return __query(graph, """SELECT DISTINCT ?p WHERE {
@@ -173,7 +185,6 @@ def _get_properties(graph):
                               }""")
 
 
-# @__context
 def _is_object_property(graph, prop):
     # type: (Graph, str) -> bool
     evidence = __query(graph, """ASK {
@@ -205,10 +216,12 @@ def _is_object_property(graph, prop):
     return False if not evidence else bool(evidence.pop())
 
 
-# @__context
 def _get_property_domain(graph, prop):
     # type: (Graph, str) -> set
-    all_property_domains = graph.query("""SELECT DISTINCT ?p ?c WHERE {
+    all_property_domains = graph.query("""
+                          PREFIX owl: <http://www.w3.org/2002/07/owl#>
+                          PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                          SELECT DISTINCT ?p ?c WHERE {
                              { ?p rdfs:domain ?c }
                              UNION
                              { ?c rdfs:subClassOf [ owl:onProperty ?p ] }
@@ -220,10 +233,12 @@ def _get_property_domain(graph, prop):
     return __extend_with(_get_subtypes, graph, dom)
 
 
-# @__context
 def _get_property_range(graph, prop):
     # type: (Graph, str) -> set
-    all_property_ranges = graph.query("""SELECT DISTINCT ?p ?r WHERE {
+    all_property_ranges = graph.query("""
+                                        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+                                        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                                        SELECT DISTINCT ?p ?r WHERE {
                                               {?p rdfs:range ?r}
                                               UNION
                                               {
@@ -244,20 +259,22 @@ def _get_property_range(graph, prop):
     return __extend_with(_get_subtypes, graph, rang)
 
 
-# @__context
 def _get_property_inverses(graph, prop):
     # type: (Graph, str) -> set
     return __query(graph, """SELECT DISTINCT ?i WHERE {
                                  {%s owl:inverseOf ?i}
                                  UNION
                                  {?i owl:inverseOf %s}
+                                 FILTER(isURI(?i))
                                }""" % (prop, prop))
 
 
-# @__context
 def _get_property_constraints(graph, prop):
     # type: (Graph, str) -> set
-    all_property_domains = graph.query("""SELECT DISTINCT ?p ?c WHERE {
+    all_property_domains = graph.query("""
+                               PREFIX owl: <http://www.w3.org/2002/07/owl#>
+                               PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                               SELECT DISTINCT ?p ?c WHERE {
                                  { ?p rdfs:domain ?c }
                                  UNION
                                  { ?c rdfs:subClassOf [ owl:onProperty ?p ] }
@@ -285,10 +302,19 @@ def _get_property_constraints(graph, prop):
                                             }""" % (d, prop))
             cons_range = __extend_with(_get_subtypes, graph, cons_range)
             if cons_range:
-                yield (d, list(cons_range))
+                try:
+                    is_strong_constraint = __query(graph, """ASK {                                                          
+                                                                %s rdfs:subClassOf ?d .
+                                                                ?d owl:onProperty %s .
+                                                                ?d owl:allValuesFrom []                                                               
+                                                            }""" % (d, prop)).pop()
+                except KeyError:
+                    is_strong_constraint = True
+
+                if is_strong_constraint:
+                    yield (d, list(cons_range))
 
 
-# @__context
 def _get_supertypes(graph, ty):
     # type: (Graph, str) -> set
     res = map(lambda x: __q_name(graph.namespace_manager, x), filter(lambda y: isinstance(y, URIRef),
@@ -298,7 +324,6 @@ def _get_supertypes(graph, ty):
     return set(filter(lambda x: str(x) != ty, res))
 
 
-# @__context
 def _get_subtypes(graph, ty):
     # type: (Graph, str) -> set
     res = map(lambda x: __q_name(graph.namespace_manager, x), filter(lambda y: isinstance(y, URIRef),
@@ -310,25 +335,45 @@ def _get_subtypes(graph, ty):
     return set(filter(lambda x: str(x) != ty, res))
 
 
-# @__context
 def _get_type_properties(graph, ty):
     # type: (Graph, str) -> set
-    all_class_props = graph.query("""SELECT DISTINCT ?c ?p WHERE {
-                                            {?c rdfs:subClassOf [ owl:onProperty ?p ] }
-                                            UNION
-                                            {?p rdfs:domain ?c}
-                                            FILTER (isURI(?p) && isURI(?c))
-                                          }""")
+    all_class_props = graph.query("""
+                                    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+                                    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                                    SELECT DISTINCT ?c ?p WHERE {
+                                        {?c rdfs:subClassOf [ owl:onProperty ?p ] }
+                                        UNION
+                                        {?p rdfs:domain ?c}
+                                        FILTER (isURI(?p) && isURI(?c))
+                                      }""")
 
     all_types = __extend_with(_get_supertypes, graph, ty)
     return set([__q_name(graph.namespace_manager, r.p) for r in all_class_props if
                 __q_name(graph.namespace_manager, r.c) in all_types])
 
 
-# @__context
+def _get_type_specific_properties(graph, ty):
+    # type: (Graph, str) -> set
+    all_class_props = graph.query("""
+                                        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+                                        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                                        SELECT DISTINCT ?c ?p WHERE {
+                                            {?c rdfs:subClassOf [ owl:onProperty ?p ] }
+                                            UNION
+                                            {?p rdfs:domain ?c}
+                                            FILTER (isURI(?p) && isURI(?c))
+                                          }""")
+
+    return set([__q_name(graph.namespace_manager, r.p) for r in all_class_props if
+                __q_name(graph.namespace_manager, r.c) == ty])
+
+
 def _get_type_references(graph, ty):
     # type: (Graph, str) -> set
-    all_class_props = graph.query("""SELECT ?c ?p WHERE {
+    all_class_props = graph.query("""
+                                    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+                                    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                                    SELECT ?c ?p WHERE {
                                         { ?r owl:onProperty ?p .
                                           {?r owl:someValuesFrom ?c}
                                           UNION
@@ -346,12 +391,57 @@ def _get_type_references(graph, ty):
                 __q_name(graph.namespace_manager, r.c) in all_types])
 
 
+def _get_type_specific_references(graph, ty):
+    # type: (Graph, str) -> set
+    all_class_props = graph.query("""
+                                    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+                                    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                                    SELECT ?c ?p WHERE {
+                                        { ?r owl:onProperty ?p .
+                                          {?r owl:someValuesFrom ?c}
+                                          UNION
+                                          {?r owl:allValuesFrom ?c}
+                                          UNION
+                                          {?r owl:onClass ?c}
+                                        }
+                                        UNION
+                                        {?p rdfs:range ?c}
+                                        FILTER (isURI(?p) && isURI(?c))
+                                       }""")
+
+    return set([__q_name(graph.namespace_manager, r.p) for r in all_class_props if
+                __q_name(graph.namespace_manager, r.c) == ty])
+
+
 def _context(f):
     # type: (callable) -> callable
     def wrap(self=None, *args, **kwargs):
         return cached(self.cache)(f)(self, *args, **kwargs)
 
     return wrap
+
+
+@_context
+def _query(graph, q):
+    return graph.query(q)
+
+
+class SchemaGraph(object):
+    def __init__(self, query_f, g):
+        self.g = g
+        self.__query = query_f
+
+    def __getattr__(self, item):
+        try:
+            return self.__getattribute__(item)
+        except:
+            return self.g.__getattribute__(item)
+
+    def query(self, q):
+        return self.__query(self.g, q)
+
+    def get_context(self, c):
+        return SchemaGraph(self.__query, self.g.get_context(c))
 
 
 class Schema(object):
@@ -369,15 +459,15 @@ class Schema(object):
     @property
     def graph(self):
         # type: () -> ContextGraph
-        return self.__graph
+        return SchemaGraph(self.__query, self.__graph)
 
     @graph.setter
     def graph(self, g):
         self.__graph = g
         self.__graph.store.graph_aware = False
-        self.__update_ns_dicts()
+        self.update_ns_dicts()
 
-    def __update_ns_dicts(self):
+    def update_ns_dicts(self):
         self.__namespaces.update([(uri, prefix) for (prefix, uri) in self.__graph.namespaces()])
         self.__prefixes.update([(prefix, uri) for (prefix, uri) in self.__graph.namespaces()])
         self.__cache.clear()
@@ -385,17 +475,17 @@ class Schema(object):
     def add_context(self, id, context):
         # type: (str, Graph) -> None
         _add_context(self.graph, id, context)
-        self.__update_ns_dicts()
+        self.update_ns_dicts()
 
     def update_context(self, id, context):
         # type: (str, Graph) -> None
         _update_context(self.graph, id, context)
-        self.__update_ns_dicts()
+        self.update_ns_dicts()
 
     def remove_context(self, id):
         # type: (str) -> None
         _remove_context(self.graph, id)
-        self.__update_ns_dicts()
+        self.update_ns_dicts()
         self.__cache.clear()
 
     @property
@@ -467,6 +557,20 @@ class Schema(object):
         return _get_type_properties(self.graph, t)
 
     @_context
+    def get_type_specific_properties(self, t):
+        # type: (str, Graph) -> iter
+        return _get_type_specific_properties(self.graph, t)
+
+    @_context
     def get_type_references(self, t):
         # type: (str, Graph) -> iter
         return _get_type_references(self.graph, t)
+
+    @_context
+    def get_type_specific_references(self, t):
+        # type: (str, Graph) -> iter
+        return _get_type_specific_references(self.graph, t)
+
+    @_context
+    def __query(self, g, q):
+        return g.query(q)
