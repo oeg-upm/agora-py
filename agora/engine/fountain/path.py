@@ -32,6 +32,7 @@ __author__ = 'Fernando Serena'
 log = logging.getLogger('agora.engine.fountain.path')
 
 match_elm_cycles = {}
+paths_cache = {}
 
 
 def _build_directed_graph(index, generic=False, graph=None):
@@ -49,6 +50,8 @@ def _build_directed_graph(index, generic=False, graph=None):
     else:
         graph.clear()
 
+    paths_cache.clear()
+
     graph.add_nodes_from(index.types, ty='type')
     for node in index.properties:
         p_dict = index.get_property(node)
@@ -56,14 +59,13 @@ def _build_directed_graph(index, generic=False, graph=None):
             continue
 
         dom = set(p_dict.get('domain'))
-        if generic:
-            dom = filter(lambda x: not set.intersection(set(index.get_type(x)['super']), dom), dom)
+        dom = filter(lambda x: index.get_type(x)['spec_refs'] or node in index.get_type(x)['spec_properties'], dom)
         ran = set(p_dict.get('range'))
-        if generic:
-            try:
-                ran = filter(lambda x: not set.intersection(set(index.get_type(x)['super']), ran), ran)
-            except TypeError:
-                pass
+        try:
+            ran = filter(lambda x: node in index.get_type(x)['spec_refs'] or index.get_type(x)['spec_properties'],
+                         ran)
+        except TypeError:
+            pass
         edges = []
         edges.extend([dom_edge() for d in dom])
         if p_dict.get('type') == 'object':
@@ -90,17 +92,36 @@ def _find_cycles(index):
             cycle = []
             t_cycle = None
             cycle_types = set()
-            for elm in cy:
+            for j, elm in enumerate(cy):
                 if index.is_type(elm):
                     t_cycle = elm
                 elif t_cycle is not None:
+                    cons = g_graph.get_edge_data(t_cycle, elm)['c']
+                    if cons:
+                        next_type = cy[(j + 1) % len(cy)]
+                        if next_type not in cons:
+                            t_cycle = None
+                            cycle = []
+                            cycle_types.clear()
+                            break
+
                     cycle.append({'property': elm, 'type': t_cycle})
                     cycle_types.add(t_cycle)
                     t_cycle = None
             if t_cycle is not None:
-                cycle.append({'property': cy[0], 'type': t_cycle})
-                cycle_types.add(t_cycle)
-            pipe.zadd('cycles', i, cycle)
+                cons = g_graph.get_edge_data(t_cycle, cy[0])['c']
+                if cons:
+                    next_type = cy[1]
+                    if next_type not in cons:
+                        t_cycle = None
+                        cycle = []
+                        cycle_types.clear()
+
+                if t_cycle:
+                    cycle.append({'property': cy[0], 'type': t_cycle})
+                    cycle_types.add(t_cycle)
+            if cycle:
+                pipe.zadd('cycles', i, cycle)
             cycle_types = reduce(lambda x, y: x.union(set(index.get_type(y)['sub'] + [y])), cycle_types, set())
             for ct in cycle_types:
                 pipe.sadd('cycles:{}'.format(ct), i)
@@ -112,6 +133,35 @@ def chunks(l, n):
     """Yield successive n-sized chunks from l."""
     for i in xrange(0, len(l), n):
         yield l[i:i + n]
+
+
+def _all_simple_paths(graph, source, target):
+    if (graph, source, target) not in paths_cache:
+        paths_cache[(graph, source, target)] = list(nx.all_simple_paths(graph, source, target))
+    return paths_cache.get((graph, source, target), [])
+
+
+def _get_simple_paths(index, graph, source, target):
+    if (graph, source, target) not in paths_cache:
+        paths = _all_simple_paths(graph, source, target)
+        source_type_dict = index.get_type(source)
+        target_type_dict = index.get_type(target)
+        source_type_super = source_type_dict['super']
+        target_type_super = target_type_dict['super']
+        for ss_ty in source_type_super:
+            paths.extend(_all_simple_paths(graph, ss_ty, target))
+            for ts_ty in target_type_super:
+                paths.extend(_all_simple_paths(graph, source, ts_ty))
+                sp = _all_simple_paths(graph, ss_ty, ts_ty)
+                paths.extend(sp)
+        final_paths = []
+        for p in paths:
+            if p not in final_paths:
+                final_paths.append(p)
+        if not final_paths:
+            raise nx.NetworkXNoPath
+        paths_cache[(graph, source, target)] = final_paths
+    return paths_cache[(graph, source, target)]
 
 
 def _find_seed_paths(index, sm, graph, elm, force_seed=None):
@@ -126,16 +176,22 @@ def _find_seed_paths(index, sm, graph, elm, force_seed=None):
     else:
         raise TypeError('{}?'.format(elm))
 
+    targets = filter(lambda t: not set.intersection(set(index.get_type(t)['super']), targets) or
+                               index.get_type(t)['spec_refs'], targets)
+
     if force_seed:
         seed_types = map(lambda x: x[1], force_seed)
     else:
         seed_types = sm.seeds.keys()
 
+    seed_types = filter(lambda t: not set.intersection(set(index.get_type(t)['super']), seed_types) or
+                                  index.get_type(t)['spec_properties'], seed_types)
+
     yielded = []
     for ty in seed_types:
         for target in targets:
             try:
-                ty_paths = list(nx.all_simple_paths(graph, ty, target))
+                ty_paths = _get_simple_paths(index, graph, ty, target)
             except nx.NetworkXNoPath:
                 ty_paths = None
 
@@ -150,7 +206,7 @@ def _find_seed_paths(index, sm, graph, elm, force_seed=None):
                 for path in ty_paths:
                     path = map(lambda x: {'type': x[0], 'property': x[1]}, chunks(path[:-1], 2))
                     last_step = None
-                    filter = False
+                    filtering = False
                     n_iterations = len(path)
                     if type:
                         n_iterations += 1
@@ -162,10 +218,10 @@ def _find_seed_paths(index, sm, graph, elm, force_seed=None):
                             if link_constraints:
                                 step_types = [step_type] + index.get_type(step_type)['sub']
                                 if not set.intersection(set(step_types), set(link_constraints)):
-                                    filter = True
+                                    filtering = True
                                     break
                         last_step = path[i] if i < len(path) else last_step
-                    if not filter:
+                    if not filtering:
                         if not type:
                             path.append({'type': target, 'property': elm})
                         if (ty, path) not in yielded:
@@ -178,7 +234,7 @@ def _find_path(index, sm, graph, elm, force_seed=None):
 
     def find_seeds_for(ty):
         if force_seed:
-            for s in [x[0] for x in force_seed if x[1] == ty]:
+            for s in [x[0] for x in force_seed if x[1] == ty or x[1] in index.get_type(ty)['sub']]:
                 yield s
         else:
             for s in sm.get_type_seeds(ty):
@@ -247,3 +303,9 @@ class PathManager(object):
     @property
     def path_graph(self):
         return self.__pgraph
+
+    def are_connected(self, source, target):
+        try:
+            return bool(_get_simple_paths(self.index, self.path_graph, source, target))
+        except nx.NetworkXNoPath:
+            return False
