@@ -30,13 +30,22 @@ from rdflib import RDF, URIRef, Variable, BNode, Graph
 from agora.engine.fountain import AbstractFountain
 from agora.engine.plan.agp import AGP, TP
 from agora.engine.plan.graph import graph_plan, __extend_uri
+from agora.engine.utils import Wrapper
 
 __author__ = 'Fernando Serena'
 
 log = logging.getLogger('agora.engine.plan')
 
 
-def find_root_types(fountain, root_tps, graph):
+def _extend_with_super(fountain, s):
+    extension = set()
+    for t in s:
+        extension.add(t)
+        extension.update(set(fountain.get_type(t)['super']))
+    return extension
+
+
+def find_root_types(fountain, root_tps, graph, extend=True):
     root_types = {}
     roots_dict = {}
     for (s, p, o) in root_tps:
@@ -51,16 +60,29 @@ def find_root_types(fountain, root_tps, graph):
         else:
             tp_types.update(set(fountain.get_property(graph.qname(p))['domain']))
 
+        tp_types = set(filter(
+            lambda t: not set.intersection(set(fountain.get_type(t)['super']), tp_types) or fountain.get_type(t)[
+                'spec_refs'], tp_types))
         roots_dict[(s, p, o)] = tp_types
 
     for (s, p, o) in roots_dict:
-        root_join = [(sr, pr, orr) for (sr, pr, orr) in roots_dict if sr == s]
-        types = [roots_dict[(s, p, o)]]
+        root_join = [(sr, pr, orr) for (sr, pr, orr) in roots_dict if sr == s and (sr, pr, orr) != (s, p, o)]
+        base_types = roots_dict[(s, p, o)]
+        if extend:
+            base_types = _extend_with_super(fountain, base_types)
+        types = [base_types]
         for (sr, pr, orr) in root_join:
-            types.append(roots_dict[(sr, pr, orr)])
+            join_types = roots_dict[(sr, pr, orr)]
+            if extend:
+                join_types = _extend_with_super(fountain, join_types)
+            else:
+                for jt in join_types.copy():
+                    join_types.update(set.intersection(set(fountain.get_type(jt)['sub']), base_types))
+            types.append(join_types)
         types = set.intersection(*types)
         if types:
             root_types[(s, p, o)] = types
+
     return root_types
 
 
@@ -102,7 +124,7 @@ def _chunks(l, n):
         yield l[i:i + n]
 
 
-def _build_root_paths(fountain, path, rt):
+def _build_root_paths(fountain, path, rt, root_path_id):
     def _continue(root, steps=None, index=0, last_pr=None, last_ty=None, last_pr_dict=None):
         if steps is None:
             steps = []
@@ -112,7 +134,7 @@ def _build_root_paths(fountain, path, rt):
         else:
             index_pr = path[index]
             if index == 0:
-                step = {'type': root, 'property': index_pr}
+                step = {'type': root, 'property': index_pr, 'root': root_path_id}
                 steps.append(step)
                 for p in _continue(root, steps, index=1, last_pr=index_pr, last_ty=root):
                     yield p
@@ -133,7 +155,7 @@ def _build_root_paths(fountain, path, rt):
                     if last_ty in last_pr_constraints:
                         if et not in last_pr_constraints[last_ty]:
                             continue
-                    step = {'property': index_pr, 'type': et}
+                    step = {'property': index_pr, 'type': et, 'root': root_path_id}
                     et_steps = steps[:]
                     et_steps.append(step)
                     for p in _continue(root, et_steps, index=index + 1, last_pr=index_pr, last_ty=et):
@@ -236,6 +258,8 @@ def _get_tp_paths(fountain, agp, force_seed=None):
 
         for (root, tp), paths in agp_paths.items():
             r_types = root_types.get(root, [])
+            r_types = filter(lambda t: not set.intersection(set(fountain.get_type(t)['super']), set(r_types)), r_types)
+
             for rt in r_types:
                 if (root, rt, tp) not in bgp_paths:
                     bgp_paths[(root, rt, tp)] = []
@@ -265,7 +289,7 @@ def _get_tp_paths(fountain, agp, force_seed=None):
                             seed_paths[rt]['paths'].append(p)
 
                 for path in paths:
-                    for r_tp_path in _build_root_paths(fountain, path, rt):
+                    for r_tp_path in _build_root_paths(fountain, path, rt, root):
                         bgp_paths[(root, rt, tp)].append(r_tp_path)
 
     for (root, rt, tp), paths in bgp_paths.items():
@@ -289,7 +313,13 @@ def _get_tp_paths(fountain, agp, force_seed=None):
                     copy_rt_path = copy.deepcopy(rt_path)
                     copy_rt_path['steps'].extend(path)
 
-                    if copy_rt_path not in tp_paths[tp]:
+                    existing_equivalent_paths = filter(
+                        lambda p: copy_rt_path['cycles'] == p['cycles'] and copy_rt_path['steps'] == p['steps'],
+                        tp_paths[tp])
+                    if existing_equivalent_paths:
+                        equivalent_path = existing_equivalent_paths.pop()
+                        equivalent_path['seeds'] = list(set(equivalent_path['seeds']).union(set(copy_rt_path['seeds'])))
+                    else:
                         tp_paths[tp].append(copy_rt_path)
                         if tp.p == RDF.type and isinstance(tp.o, URIRef) and not tp_hints[tp]['check']:
                             rt_path_steps = rt_path['steps']
@@ -364,5 +394,5 @@ class Planner(AbstractPlanner):
 
     def make_plan(self, agp, force_seed=None):
         # type: (AGP) -> Graph
-        plan = Plan(self.__fountain, agp, force_seed=force_seed)
+        plan = Plan(Wrapper(self.fountain), agp, force_seed=force_seed)
         return plan.graph
