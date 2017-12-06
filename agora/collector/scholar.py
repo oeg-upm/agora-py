@@ -346,7 +346,8 @@ class Fragment(object):
         n_triples = 0
 
         try:
-            collect_dict = collector.get_fragment_generator(self.agp, filters=self.filters, stop_event=self.__stop_event)
+            collect_dict = collector.get_fragment_generator(self.agp, filters=self.filters,
+                                                            stop_event=self.__stop_event)
             generator = collect_dict['generator']
             self.plan = collect_dict['plan']
             self.__aborted = False
@@ -359,16 +360,17 @@ class Fragment(object):
             try:
                 while not completed:
                     c, s, p, o = generator.next()
-                    tp = self.__tp_map[str(c.node)]
-                    self.stream.put(str(c.node), (s, p, o))
+                    tp = self.__tp_map[c.id]
+                    self.stream.put(c.id, (s, p, o))
                     self.triples.get_context(str((back_id, tp))).add((s, p, o))
-                    self.__notify((str(c.node), s, p, o))
+                    self.__notify((c.id, s, p, o))
                     n_triples += 1
             except StopIteration:
                 completed = True
             except StopException:
                 self.__aborted = True
             except Exception:
+                traceback.print_exc()
                 self.__aborted = True
 
         try:
@@ -686,7 +688,7 @@ class FragmentIndex(object):
                             except Exception as e:
                                 if index_key in FragmentIndex.instances:
                                     del FragmentIndex.instances[index_key]
-                                # traceback.print_exc()
+                                    # traceback.print_exc()
 
                     if futures:
                         log.info('Waiting for: {} collections'.format(len(futures)))
