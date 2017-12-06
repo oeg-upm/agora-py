@@ -70,6 +70,7 @@ def __load_owl(owl):
         raise VocabularyError()
 
     owl_g = Graph()
+    owl_g.bind('owl', OWL)
     for s, p, o in raw_g.triples((None, None, None)):
         if (isinstance(s, URIRef) and s.startswith('file')) or p.startswith('file') or (
                     isinstance(o, URIRef) and o.startswith('file')):
@@ -83,7 +84,9 @@ def __load_owl(owl):
     uri = found_ontos.pop()
 
     for p, u in raw_g.namespaces():
-        owl_g.bind(p, u)
+        if not p.startswith('ns'):
+            owl_g.bind(p, u)
+
     vid = [p for (p, u) in owl_g.namespaces() if uri in u and p != '']
     imports = owl_g.objects(uri, OWL.imports)
     if not len(vid):
@@ -116,16 +119,18 @@ def add_vocabulary(schema, owl):
                 im_g.load(im_uri)
             except BadSyntax:
                 log.error('Bad syntax in {}'.format(im_uri))
-
-        try:
-            child_vids = add_vocabulary(schema, im_g.serialize(format='turtle'))
-            vids.extend(child_vids)
-        except DuplicateVocabulary, e:
-            log.debug('vocabulary already added: {}'.format(im_uri))
-        except VocabularyNotFound, e:
-            log.warning('uri not found for {}'.format(im_uri))
-        except Exception, e:
-            log.error(e.message)
+        except Exception:
+            log.warn("Couldn't import {}".format(im_uri))
+        else:
+            try:
+                child_vids = add_vocabulary(schema, im_g.serialize(format='turtle'))
+                vids.extend(child_vids)
+            except DuplicateVocabulary, e:
+                log.debug('vocabulary already added: {}'.format(im_uri))
+            except VocabularyNotFound, e:
+                log.warning('uri not found for {}'.format(im_uri))
+            except Exception, e:
+                log.error(e.message)
 
     return vids
 
