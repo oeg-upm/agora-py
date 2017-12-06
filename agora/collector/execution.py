@@ -133,21 +133,21 @@ def _follow_in_breadth(n, next_seeds, tree_graph, workers, follow, pool, parent=
     try:
         threads = []
         for s in next_seeds:
-            # try:
-            #     workers.put_nowait(s)
-            #     future = pool.submit(follow, n, s, tree_graph, parent=parent, queue=queue)
-            #     threads.append(future)
-            # except Queue.Full:
-            # If all threads are busy...I'll do it myself
-            follow(n, s, tree_graph, parent=parent, queue=queue, cycle=cycle)
+            try:
+                workers.put_nowait(s)
+                future = pool.submit(follow, n, s, tree_graph, parent=parent, queue=queue)
+                threads.append(future)
+            except Queue.Full:
+                # If all threads are busy...I'll do it myself
+                follow(n, s, tree_graph, parent=parent, queue=queue, cycle=cycle)
 
-        # if len(threads) >= workers:
-        #     wait(threads)
-        #     [(workers.get_nowait(), workers.task_done()) for _ in threads]
-        #     threads = []
-        #
-        # wait(threads)
-        # [(workers.get_nowait(), workers.task_done()) for _ in threads]
+        if len(threads) >= workers:
+            wait(threads)
+            [(workers.get_nowait(), workers.task_done()) for _ in threads]
+            threads = []
+
+        wait(threads)
+        [(workers.get_nowait(), workers.task_done()) for _ in threads]
         next_seeds.clear()
     except (IndexError, KeyError):
         traceback.print_exc()
@@ -462,7 +462,7 @@ class PlanExecutor(object):
 
                     space_dict[space] = __join_space_dicts(space_dict.get(space, {}), node_space_dict)
 
-            if not all(seed_v_pass.items()):
+            if not all(seed_v_pass.values()):
                 return {}
 
             for seed_v in filter(lambda x: not seed_v_pass[x], seed_v_pass):
@@ -586,8 +586,7 @@ class PlanExecutor(object):
                                 val_space_link = []
                                 for l in space_link_succ:
                                     l_expected = set(l[2]['expectedType'])
-                                    # if expected_in_patterns.difference(l_expected):
-                                    if not expected_in_patterns.intersection(l_expected):
+                                    if 'byPattern' not in l[1] or not expected_in_patterns.intersection(l_expected):
                                         val_space_link.append(l)
 
                                 space_link_succ = val_space_link
@@ -608,7 +607,7 @@ class PlanExecutor(object):
 
                                 predicates = set(map(lambda x: x.p, patterns))
                                 direct_predicates = set.difference(predicates, links)
-                                predicate_pass = {pred: pred in direct_predicates for pred in predicates}
+                                predicate_pass = {pred: pred in direct_predicates for pred in pattern_predicates}
 
                                 wait_for_links = set.intersection(expected_in_links, expected_in_patterns)
 
@@ -659,13 +658,6 @@ class PlanExecutor(object):
                                                         __notify(queue, seed, found_triples)
                                                         notified = True
                                                     __send_quads(seed, quads, seed_variables, space)
-
-                                                    # if all(predicate_pass.values()):
-                                                    #     candidates = s_dict['candidates']
-                                                    #     seed_variables = s_dict['seed_v']
-                                                    #     quads = __process_candidates(candidates, space)
-                                                    #     s_dict['candidates'] = set()
-                                                    #     __send_quads(seed, quads, seed_variables, space)
 
                             if follow_thread:
                                 follow_thread.join()
