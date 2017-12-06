@@ -24,7 +24,7 @@ from threading import Lock
 
 import networkx as nx
 from rdflib import BNode
-from rdflib import RDF, URIRef
+from rdflib import RDF, URIRef, OWL
 from rdflib import RDFS
 from rdflib import Variable
 from shortuuid import uuid
@@ -112,6 +112,7 @@ class TPWrapper(object):
     def __init__(self, plan, node):
         self.__defined_by = list(plan.subjects(AGORA.definedBy, node)).pop()
         self.__node = node
+        self.id = list(plan.objects(self.__node, RDFS.label)).pop().toPython()
 
         predicate = list(plan.objects(node, predicate=AGORA.predicate)).pop()
         self.object_node = list(plan.objects(node, predicate=AGORA.object)).pop()
@@ -288,11 +289,8 @@ class PlanWrapper(object):
         self.__node_patterns = {}
         self.__inverses = {}
 
-        for r in plan.query("""
-                SELECT DISTINCT ?p ?inv WHERE {
-                    ?inv owl:inverseOf ?p
-                }"""):
-            self.__inverses[r.p] = r.inv
+        for s, o in plan.subject_objects(predicate=OWL.inverseOf):
+            self.__inverses[o] = s
 
         cycles = reduce(lambda x, y: y.union(x), self.__ss.cycles.values(), set([]))
 
@@ -315,7 +313,7 @@ class PlanWrapper(object):
                 c_root = c.root_node
                 last_node = None
                 for i in range(len(c_edges)):
-                    cu, cv, c_edge = list(c.edges_iter(c_root, data=True)).pop()
+                    cu, cv, c_edge = list(c.edges(c_root, data=True)).pop()
                     source = u if i == 0 else last_node
                     dest = u if i == len(c_edges) - 1 else self.__clone_node(c, cv, self.__graph.get_node_data(u))
                     last_node = dest
@@ -394,7 +392,7 @@ class PlanWrapper(object):
 
         suc = []
         on_property_nodes = {}
-        all_suc = self.__graph.edges_iter(node, data=True)
+        all_suc = list(self.__graph.edges(node, data=True))
         for (u, v, data) in sorted(all_suc, key=lambda x: x[2].get('onProperty') is None):
             on_property = data.get('onProperty')
 
@@ -442,9 +440,6 @@ class PlanWrapper(object):
             link_succ = filter(lambda (n, n_data, e_data): e_data.get(
                 'onProperty', None) and not e_data.get(
                 'cycle', False), successors)
-            # link_succ = filter(lambda (n, n_data, e_data): not n_data.get('byPattern', None) and e_data.get(
-            #     'onProperty', None) and not e_data.get(
-            #     'cycle', False), successors)
             self.__link_successors[node] = link_succ
         return self.__link_successors[node]
 
