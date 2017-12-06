@@ -60,7 +60,7 @@ def cached(cache, level=0):
         def wrap(*args, **kwargs):
             if not isinstance(cache, Cache):
                 raise AttributeError('Cache type is not valid')
-            cache_key = b64encode(f.__name__ + str(args[0:]) + str(kwargs))
+            cache_key = b64encode(f.__name__ + str(args[1:]) + str(kwargs))
             if not cache.stable >= level or cache_key not in cache:
                 result = f(*args, **kwargs)
                 cache[cache_key] = result
