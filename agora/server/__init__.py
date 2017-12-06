@@ -25,10 +25,11 @@ import urlparse
 from functools import wraps
 
 import requests
-from flask import Flask, jsonify, request, url_for
+from flask import Flask, jsonify, request, url_for, make_response
 from flask import Response
 from flask import stream_with_context
 from flask_negotiate import consumes, produces
+from rdflib import URIRef
 
 __author__ = 'Fernando Serena'
 
@@ -37,6 +38,21 @@ TURTLE = 'text/turtle'
 HTML = 'text/html'
 
 log = logging.getLogger('agora.server')
+
+
+def tuples_force_seed(request_json):
+    for type, seeds in request_json.items():
+        for seed in seeds:
+            yield (URIRef(seed), type)
+
+
+def dict_force_seed(force_seed):
+    fs_dict = {}
+    for seed, type in force_seed:
+        if type not in fs_dict:
+            fs_dict[type] = []
+        fs_dict[type].append(seed)
+    return fs_dict
 
 
 class APIError(Exception):
@@ -100,6 +116,10 @@ class Server(Flask):
         if result is None:
             result = ''
 
+        headers = None
+        if type(result) == tuple:
+            result, headers = result
+
         if hasattr(result, 'next'):
             response = Response(stream_with_context(result), mimetype=produce_types[0])
         elif JSON in produce_types:
@@ -107,6 +127,10 @@ class Server(Flask):
         else:
             response = self.make_response(str(result))
             response.headers['Content-Type'] = produce_types[0] if produce_types else 'text/plain'
+
+        if headers:
+            response.headers.extend(headers.items())
+
         return response
 
     @property
@@ -136,8 +160,11 @@ class Server(Flask):
                 # Request data is passed as first argument
                 result = f(data, *args, **kwargs)
                 response = self.produce(result, produce_types)
-                response.headers['Location'] = result
-                response.status_code = 201
+                if not produce_types:
+                    response.headers['Location'] = result
+                    response.status_code = 201
+                else:
+                    response.status_code = 200
                 return response
 
             content_f = consumes(*consume_types)(wrap)
@@ -172,10 +199,12 @@ class Server(Flask):
         def decorator(f):
             @wraps(f)
             def wrap(*args, **kwargs):
-                response = self.produce(f(*args, **kwargs), produce_types)
+                f(*args, **kwargs)
+                response = make_response()
+                response.status_code = 200
                 return response
 
-            return self.route(rule, methods=['DELETE'])(produces(*produce_types)(wrap))
+            return self.route(rule, methods=['DELETE'])(wrap)  # (produces(*produce_types)(wrap))
 
         return decorator
 
@@ -191,7 +220,11 @@ class Client(object):
                                     headers={'Accept': accept},
                                     stream=stream)
             if response.status_code != 200:
-                raise IOError(response.content)
+                try:
+                    message = response.json()['message']
+                except (ValueError, KeyError):
+                    message = response.content
+                raise IOError({'code': response.status_code, 'text': message})
             if stream:
                 return response.iter_lines()
             if accept == 'application/json':
@@ -207,9 +240,49 @@ class Client(object):
             return json.dumps(data)
         return str(data)
 
-    def _post_request(self, path, data, content_type='text/turtle'):
+    def _post_request(self, path, data, content_type='text/turtle', accept='application/json'):
         response = requests.post(urlparse.urljoin(self.host, path),
                                  data=self.__process_request_data(data, content_type),
-                                 headers={'Content-Type': content_type})
-        if response.status_code != 201:
+                                 headers={'Content-Type': content_type, 'Accept': accept})
+        if response.status_code == 200:
+            try:
+                if accept == 'application/json':
+                    return response.json()
+            except ValueError:
+                pass
+            return response.content
+        elif response.status_code == 201:
+            return response.headers['Location']
+        else:
+            try:
+                message = response.json()['message']
+            except (ValueError, KeyError):
+                message = response.content
+            # log.warning(message)
+            raise IOError({'code': response.status_code, 'text': message})
+
+    def _put_request(self, path, data, content_type='text/turtle', accept='application/json'):
+        response = requests.put(urlparse.urljoin(self.host, path),
+                                data=self.__process_request_data(data, content_type),
+                                headers={'Content-Type': content_type, 'Accept': accept})
+        if response.status_code == 200:
+            try:
+                if accept == 'application/json':
+                    return response.json()
+            except ValueError:
+                pass
+            return response.content
+        elif response.status_code == 201:
+            return response.headers['Location']
+        else:
+            try:
+                message = response.json()['message']
+            except (ValueError, KeyError):
+                message = response.content
+            # log.warning(message)
+            raise IOError({'code': response.status_code, 'text': message})
+
+    def _delete_request(self, path):
+        response = requests.delete(urlparse.urljoin(self.host, path))
+        if response.status_code != 200:
             log.warning(response.content)
