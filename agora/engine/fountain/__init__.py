@@ -21,6 +21,9 @@
 import hashlib
 import logging
 from abc import abstractmethod
+from multiprocessing import Lock
+
+from rdflib import URIRef
 
 from agora.engine.fountain import onto as manager
 from agora.engine.fountain.index import Index
@@ -84,8 +87,8 @@ class AbstractFountain(object):
         raise NotImplementedError
 
     @abstractmethod
-    def get_paths(self, elm):
-        # type: (str) -> (iter, iter)
+    def get_paths(self, elm, force_seed=None):
+        # type: (str, iter) -> (iter, iter)
         raise NotImplementedError
 
     @abstractmethod
@@ -96,6 +99,10 @@ class AbstractFountain(object):
     @property
     @abstractmethod
     def prefixes(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def add_prefixes(self, prefixes):
         raise NotImplementedError
 
     @property
@@ -129,6 +136,11 @@ class AbstractFountain(object):
         # type: (str) -> None
         raise NotImplementedError
 
+    @abstractmethod
+    def connected(self, source, target):
+        # type: (str, str) -> bool
+        raise NotImplementedError
+
 
 class Fountain(AbstractFountain):
     def __init__(self):
@@ -136,6 +148,7 @@ class Fountain(AbstractFountain):
         self.__schema = None
         self.__pm = None
         self.__sm = None
+        self.__lock = Lock()
 
     @property
     def index(self):
@@ -183,30 +196,43 @@ class Fountain(AbstractFountain):
 
     def add_vocabulary(self, owl):
         # type: (str) -> iter
-        added_vocs_iter = manager.add_vocabulary(self.__schema, owl)
-        self.__schema.cache.stable = 0
-        for vid in reversed(added_vocs_iter):
-            self.__index.index_vocabulary(vid)
-        self.__pm.calculate()
-        self.__sm.validate()
-        self.__schema.cache.stable = 1
-        return added_vocs_iter
+        with self.__lock:
+            added_vocs_iter = manager.add_vocabulary(self.__schema, owl)
+            self.__schema.cache.stable = 0
+            for vid in reversed(added_vocs_iter):
+                self.__index.index_vocabulary(vid)
+            self.__pm.calculate()
+            self.__sm.validate()
+            self.__schema.cache.stable = 1
+            return added_vocs_iter
 
     def update_vocabulary(self, vid, owl):
         # type: (str, str) -> None
-        manager.update_vocabulary(self.__schema, vid, owl)
-        self.__pm.calculate()
-        self.__sm.validate()
+        with self.__lock:
+            manager.update_vocabulary(self.__schema, vid, owl)
+            self.__schema.cache.stable = 0
+            for v in manager.get_vocabularies(self.__schema):
+                self.__index.index_vocabulary(v)
+            self.__pm.calculate()
+            self.__sm.validate()
+            self.__schema.cache.stable = 1
 
     def delete_vocabulary(self, vid):
         # type: (str) -> None
-        manager.delete_vocabulary(self.__schema, vid)
-        self.__pm.calculate()
-        self.__sm.validate()
+        with self.__lock:
+            manager.delete_vocabulary(self.__schema, vid)
+            self.__schema.cache.stable = 0
+            self.__index.delete_vocabulary(vid)
+            for v in manager.get_vocabularies(self.__schema):
+                self.__index.index_vocabulary(v)
+            self.__pm.calculate()
+            self.__sm.validate()
+            self.__schema.cache.stable = 1
 
     def get_vocabulary(self, vid):
         # type: (str) -> str
-        return manager.get_vocabulary(self.__schema, vid)
+        with self.__lock:
+            return manager.get_vocabulary(self.__schema, vid)
 
     @property
     def vocabularies(self):
@@ -232,6 +258,10 @@ class Fountain(AbstractFountain):
         # type: (str, iter) -> (iter, iter)
         return self.__pm.get_paths(elm, force_seed=force_seed)
 
+    def connected(self, source, target):
+        # type: (str, str) -> bool
+        return self.__pm.are_connected(source, target)
+
     def add_seed(self, uri, type):
         # type: (str, str) -> str
         return self.__sm.add_seed(uri, type)
@@ -239,6 +269,17 @@ class Fountain(AbstractFountain):
     @property
     def prefixes(self):
         return self.__index.schema.prefixes
+
+    def add_prefixes(self, prefixes):
+        for prefix, ns in prefixes.items():
+            self.__schema.graph.namespace_manager.bind(prefix, URIRef(ns), replace=True, override=True)
+        self.__schema.update_ns_dicts()
+        self.__schema.cache.stable = 0
+        for vid in self.vocabularies:
+            self.__index.index_vocabulary(vid)
+        self.__pm.calculate()
+        self.__sm.validate()
+        self.__schema.cache.stable = 1
 
     @property
     def seeds(self):
