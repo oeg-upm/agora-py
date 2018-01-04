@@ -720,6 +720,7 @@ class PlanExecutor(object):
                 except StopException:
                     self.__aborted = True
 
+            log.info('Started plan execution...')
             thread = Thread(target=execute_plan)
             thread.start()
 
