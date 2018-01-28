@@ -271,8 +271,10 @@ class Fountain(AbstractFountain):
         return self.__index.schema.prefixes
 
     def add_prefixes(self, prefixes):
+        current_ns = dict(self.__schema.graph.namespaces()).values()
         for prefix, ns in prefixes.items():
-            self.__schema.graph.namespace_manager.bind(prefix, URIRef(ns), replace=True, override=True)
+            if not (prefix.startswith('ns') and ns in current_ns):
+                self.__schema.graph.namespace_manager.bind(prefix, URIRef(ns), replace=True, override=True)
         self.__schema.update_ns_dicts()
         self.__schema.cache.stable = 0
         for vid in self.vocabularies:

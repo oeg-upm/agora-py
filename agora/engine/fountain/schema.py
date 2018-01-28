@@ -111,7 +111,7 @@ def _add_context(graph, vid, g):
                 vid_context.bind(rev_ns[ns], ns)
             del rev_ns[ns]
 
-    rev_ns = {ns: prefix for prefix, ns in g.namespaces() if not ns.startswith('ns')}
+    rev_ns = {ns: prefix for prefix, ns in g.namespaces() if not prefix.startswith('ns')}
     vid_context = graph.get_context(vid)
     for s, p, o in g.triples((None, None, None)):
         if o != OWL.Ontology:
