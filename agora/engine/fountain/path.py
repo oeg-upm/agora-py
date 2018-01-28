@@ -263,7 +263,17 @@ def _find_path(index, sm, graph, elm, force_seed=None):
 
     applying_cycles = set(cycle_ids)
 
-    applying_cycles = {int(cid): eval(index.r.zrange('cycles', cid, cid).pop()) for cid in applying_cycles}
+    new_applying_cycles = {}
+    for cid in applying_cycles:
+        try:
+            eval_cycle = eval(index.r.zrange('cycles', cid, cid).pop())
+            new_applying_cycles[int(cid)] = eval_cycle
+        except:
+            pass
+
+    applying_cycles = new_applying_cycles
+
+    # applying_cycles = {int(cid): eval(index.r.zrange('cycles', cid, cid).pop()) for cid in applying_cycles}
     return seed_paths, [{'cycle': cid, 'steps': applying_cycles[cid]} for cid in
                         applying_cycles]
 
