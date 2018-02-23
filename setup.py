@@ -39,7 +39,7 @@ setup(
     url=metadata['github'],
     download_url="https://github.com/fserena/agora-py/tarball/{}".format(metadata['version']),
     packages=find_packages(exclude=['ez_setup', 'examples', 'tests']),
-    install_requires=['requests', 'redislite', 'flask', 'shortuuid', 'Flask-Negotiate', 'redis', 'hiredis',
+    install_requires=['requests', 'flask', 'shortuuid', 'Flask-Negotiate', 'redis', 'hiredis',
                       'rdflib==4.2.1', 'networkx>=2.0', 'futures', 'rfc3987', 'python-dateutil'],
     classifiers=[],
     include_package_data=True,

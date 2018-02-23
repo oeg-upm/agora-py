@@ -1,6 +1,5 @@
 werkzeug
 shortuuid
-redislite
 redis
 hiredis
 rdflib==4.2.1
