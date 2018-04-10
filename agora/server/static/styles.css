@@ -18,8 +18,9 @@
 }
 
 .title {
-    font-family: "Roboto Light", serif;
+    font-family: "Roboto", serif;
     margin-top: 20px;
+    font-weight: 100;
 }
 
 .scroll {
@@ -150,13 +151,15 @@
 #rbadge {
     margin-left: 10px;
     background-color: #509dc8;
-
+    font-weight: 400;
+    font-family: "Roboto", serif;
 }
 
 #fbadge {
     margin-left: 10px;
     background-color: #509dc8;
-
+    font-weight: 400;
+    font-family: "Roboto", serif;
 }
 
 #query {
