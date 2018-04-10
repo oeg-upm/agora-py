@@ -213,7 +213,7 @@ class FountainClient(Client, AbstractFountain):
             req_json = {'elm': str(elm), 'force_seed': type_seed_dict}
             response = self._post_request(url, req_json, content_type='application/json', accept='application/json')
         else:
-            url = 'paths/{}' % elm
+            url = 'paths/%s' % elm
             response = self._get_request(url, accept='application/json')
 
         return response
