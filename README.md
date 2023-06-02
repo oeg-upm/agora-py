@@ -507,5 +507,5 @@ _:var_v a agora:Variable ;
 
 [^6]: Bouquet et al. Querying the Web of Data: A Formal Approach (2009)
 
-
+## License
 agora-py is distributed under the Apache License, version 2.0.
